@@ -1,0 +1,15 @@
+{
+  "name": "react-driller",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "ts-morph": "^28.0.0"
+  }
+}
