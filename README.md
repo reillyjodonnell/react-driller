@@ -8,11 +8,48 @@ Run react-driller and it tells you where your useState should live. You can use 
 
 `npx react-driller src/App.tsx`
 
-and you get output like:
+### Super small example
+
+Experiencing prop drilling hell? Imagine this but in the scale of an actual app:
+
+```tsx
+// src/App.tsx
+function App() {
+  const [theme, setTheme] = useState("light");
+  return <Toolbar theme={theme} setTheme={setTheme} />;
+}
+
+function Toolbar({ theme, setTheme }) {
+  return <ThemeToggle theme={theme} setTheme={setTheme} />;
+}
+
+function ThemeToggle({ theme, setTheme }) {
+  return (
+    <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
+      {theme}
+    </button>
+  );
+}
+```
+
+...
+
+Run the cli:
 
 ```
-move: `theme` from App src/App.tsx:5:3 to ThemeToggle src/Toolbar.tsx:12:1
-✓ checked `count` src/App.tsx:6:3
+$ npx react-driller src/App.tsx
+
+  App  src/App.tsx:2:30
+
+    src/App.tsx:2:30  `theme`  App → ThemeToggle  src/App.tsx:11:1
+```
+
+And your agent can fix it
+
+```
+  ThemeToggle  src/App.tsx:11:30
+
+    src/App.tsx:11:30  `theme`  ✓ in ThemeToggle
 ```
 
 thanks for checking it out <3
