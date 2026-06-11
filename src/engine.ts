@@ -4,13 +4,13 @@ import {
   scanNode,
   useStateExtractor,
 } from "./analyzer";
-import { Usage, type DrillerNode, type DrillerRoot } from "./node";
+import type { DrillerNode, DrillerRoot } from "./node";
 import { generateSetup } from "./setup";
 
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
-const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
+const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 
 function formatLocation(source: { file: string; line: number; column: number }) {
   const rel = path.relative(process.cwd(), source.file);
@@ -20,52 +20,6 @@ function formatLocation(source: { file: string; line: number; column: number }) 
 function stateName(root: DrillerRoot): string {
   const [first] = [...root.getter];
   return first?.getName() ?? "<anonymous>";
-}
-
-function usageTag(usage: number): string {
-  const parts: string[] = [];
-  if (usage & Usage.Gets) parts.push("reads");
-  if (usage & Usage.Sets) parts.push("writes");
-  return parts.length ? `(${parts.join(", ")})` : "";
-}
-
-function renderTree(
-  root: DrillerRoot,
-  lca: DrillerRoot | DrillerNode,
-  basePad: string,
-) {
-  function render(
-    node: DrillerRoot | DrillerNode,
-    prefix: string,
-    connector: string,
-  ) {
-    const isRoot = node === root;
-    const isLcaMove = node === lca && lca !== root;
-    const segments: string[] = [bold(node.name)];
-
-    if (isRoot) {
-      segments.push(
-        `${cyan("◆ useState")} ${dim(formatLocation(node.source))}`,
-      );
-    }
-    if (isLcaMove) {
-      segments.push(
-        `${yellow("★ move here")} ${dim(formatLocation(node.source))}`,
-      );
-    }
-    const tag = usageTag(node.usage);
-    if (tag) segments.push(dim(tag));
-
-    console.log(`${basePad}${dim(prefix + connector)}${segments.join("  ")}`);
-
-    const childPrefix =
-      prefix + (connector === "└─ " ? "   " : connector === "├─ " ? "│  " : "");
-    node.children.forEach((child, i) => {
-      const isLast = i === node.children.length - 1;
-      render(child, childPrefix, isLast ? "└─ " : "├─ ");
-    });
-  }
-  render(root, "", "");
 }
 
 export function startEngine(filePath: string) {
@@ -95,27 +49,43 @@ export function startEngine(filePath: string) {
   }
 
   for (const [component, componentRoots] of groups) {
-    console.log(`  ${bold(component)}  ${dim(formatLocation(componentRoots[0]!.source))}`);
+    console.log(
+      `  ${bold(component)}  ${dim(formatLocation(componentRoots[0]!.source))}`,
+    );
     console.log();
 
-    for (const root of componentRoots) {
+    type Row = {
+      loc: string;
+      name: string;
+      verdict: string;
+    };
+
+    const rows: Row[] = componentRoots.map((root) => {
       const lca = retrieveLeastCommonAncestorFromRoot(root);
       const name = stateName(root);
-
+      const loc = formatLocation(root.source);
       if (lca === root) {
-        console.log(
-          `    ${dim(`✓ checked \`${name}\` ${formatLocation(root.source)}`)}`,
-        );
-        console.log();
-        continue;
+        return {
+          loc,
+          name,
+          verdict: `${green("✓")} in ${bold(root.name)}`,
+        };
       }
+      return {
+        loc,
+        name,
+        verdict: `${bold(root.name)} ${yellow("→")} ${bold(lca.name)}  ${dim(formatLocation(lca.source))}`,
+      };
+    });
 
-      console.log(
-        `    ${yellow("move:")} ${bold(`\`${name}\``)} from ${bold(root.name)} ${dim(formatLocation(root.source))} to ${bold(lca.name)} ${dim(formatLocation(lca.source))}`,
-      );
-      console.log();
-      renderTree(root, lca, "      ");
-      console.log();
+    const locWidth = Math.max(...rows.map((r) => r.loc.length));
+    const nameWidth = Math.max(...rows.map((r) => r.name.length + 2)); // backticks
+
+    for (const row of rows) {
+      const locCol = dim(row.loc.padEnd(locWidth));
+      const nameCol = `\`${row.name}\``.padEnd(nameWidth);
+      console.log(`    ${locCol}  ${nameCol}  ${row.verdict}`);
     }
+    console.log();
   }
 }

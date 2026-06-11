@@ -1,6 +1,4 @@
 import ts from "typescript";
-
-import fs from "node:fs";
 import path from "node:path";
 
 export function generateSetup({ filePath }: { filePath: string }): {
@@ -8,48 +6,63 @@ export function generateSetup({ filePath }: { filePath: string }): {
   checker: ts.TypeChecker;
   program: ts.Program;
 } {
-  const fileName = path.resolve(process.cwd(), filePath);
+  const absPath = path.resolve(process.cwd(), filePath);
+  const options = resolveCompilerOptions(absPath);
 
-  const source = fs.readFileSync(fileName, "utf8");
-
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX,
-  );
-
-  const host = ts.createCompilerHost({
-    jsx: ts.JsxEmit.ReactJSX,
-    target: ts.ScriptTarget.Latest,
-    module: ts.ModuleKind.ESNext,
+  const program = ts.createProgram({
+    rootNames: [absPath],
+    options,
   });
 
-  host.getSourceFile = (name) => {
-    if (name === fileName) return sourceFile;
-    return undefined;
+  const sourceFile = program.getSourceFile(absPath);
+  if (!sourceFile) {
+    throw new Error(`could not load source file: ${absPath}`);
+  }
+
+  return {
+    sourceFile,
+    checker: program.getTypeChecker(),
+    program,
   };
+}
 
-  host.readFile = (name) => {
-    if (name === fileName) return source;
-    return undefined;
-  };
-
-  host.fileExists = (name) => name === fileName;
-
-  const program = ts.createProgram(
-    [fileName],
-    {
-      jsx: ts.JsxEmit.ReactJSX,
-      target: ts.ScriptTarget.Latest,
-      module: ts.ModuleKind.ESNext,
-      noResolve: true,
-    },
-    host,
+function resolveCompilerOptions(absPath: string): ts.CompilerOptions {
+  const configPath = ts.findConfigFile(
+    path.dirname(absPath),
+    ts.sys.fileExists,
+    "tsconfig.json",
   );
 
-  const checker = program.getTypeChecker();
+  if (!configPath) return defaultOptions();
 
-  return { checker, program, sourceFile };
+  const { config, error } = ts.readConfigFile(configPath, ts.sys.readFile);
+  if (error || !config) return defaultOptions();
+
+  const parsed = ts.parseJsonConfigFileContent(
+    config,
+    ts.sys,
+    path.dirname(configPath),
+  );
+
+  return {
+    ...parsed.options,
+    noResolve: false,
+    noEmit: true,
+    skipLibCheck: true,
+  };
+}
+
+function defaultOptions(): ts.CompilerOptions {
+  return {
+    jsx: ts.JsxEmit.ReactJSX,
+    target: ts.ScriptTarget.ESNext,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    allowJs: true,
+    allowImportingTsExtensions: true,
+    esModuleInterop: true,
+    allowSyntheticDefaultImports: true,
+    skipLibCheck: true,
+    noEmit: true,
+  };
 }

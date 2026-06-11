@@ -331,6 +331,10 @@ function matchPropBinding(
   const param = fn.parameters[0];
   if (!param) return undefined;
 
+  if (ts.isIdentifier(param.name)) {
+    return checker.getSymbolAtLocation(param.name);
+  }
+
   if (ts.isObjectBindingPattern(param.name)) {
     for (const el of param.name.elements) {
       // propertyName is set only when renamed: { value: v }
@@ -345,6 +349,9 @@ function matchPropBinding(
       }
     }
   }
+
+  // handle the prop variations
+
   return undefined;
 }
 

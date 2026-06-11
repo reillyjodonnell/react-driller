@@ -553,6 +553,32 @@ describe("JSX / React edge cases", () => {
     expect(root.children.length).toBe(0);
   });
 
+  // Child uses a non-destructured `(props: Props)` parameter instead of
+  // `{ count }`. Today matchPropBinding only knows how to walk
+  // ObjectBindingPattern, so the analyzer currently throws "no op - symbol
+  // didn't match on the flip from parent to child" on this shape. Real-world
+  // React codebases mix destructured and non-destructured props freely, so
+  // this case has to be handled before the tool can be pointed at one. This
+  // test pins the desired behavior: don't throw, record forwarding on the
+  // parent, and create a child node for Child.
+  it("handles non-destructured (props: Props) child params without throwing", () => {
+    expect(() => {
+      const root = drive(`
+        function App() {
+          const [count, setCount] = useState(0);
+          return <Child count={count} />;
+        }
+        function Child(props: { count: number }) {
+          return <span>{props.count}</span>;
+        }
+      `);
+
+      expect(root.usage & Usage.ForwardsGetter).toBe(Usage.ForwardsGetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Child");
+    }).not.toThrow();
+  });
+
   // Conditional rendering with `&&` keeps the identifier as a direct child of
   // a JsxExpression on the inner element's attribute, so forwarding is still
   // detected.
