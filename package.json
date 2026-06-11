@@ -1,33 +1,43 @@
 {
   "name": "react-driller",
-  "module": "index.ts",
-  "type": "module",
-  "private": false,
-  "bin": {
-    "react-driller": "./src/cli.ts"
-  },
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
-    "ts-morph": "^28.0.0"
-  },
-  "version": "0.0.1-alpha.0",
+  "version": "0.1.0",
   "description": "bye prop drilling",
-  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "react-driller": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "cli": "bun run typecheck && bun src/cli.ts"
+    "cli": "bun run typecheck && bun src/cli.ts",
+    "build": "bun build src/cli.ts --target=node --format=esm --outfile=dist/cli.js && chmod +x dist/cli.js",
+    "prepublishOnly": "bun run build"
+  },
+  "keywords": [
+    "react",
+    "useState",
+    "prop-drilling",
+    "lift-state",
+    "codemod",
+    "analyzer"
+  ],
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/reillyjodonnell/react-driller.git"
   },
-  "author": "",
+  "author": "Reilly",
   "license": "ISC",
   "bugs": {
     "url": "https://github.com/reillyjodonnell/react-driller/issues"
