@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { Usage, type DrillerNode, type DrillerRoot } from "./node";
-import type { ts } from "ts-morph";
+import ts from "typescript";
 
 describe("state flow tree", () => {
   it("represents a basic prop-drilling path", () => {
@@ -12,6 +12,7 @@ describe("state flow tree", () => {
 
     const countSymbol = {} as ts.Symbol;
     const setCountSymbol = {} as ts.Symbol;
+    const ownerComponentFunction = {} as ts.FunctionDeclaration;
 
     const root: DrillerRoot = {
       children: [],
@@ -25,7 +26,8 @@ describe("state flow tree", () => {
         line: 1,
       },
       type: "root",
-      usage: Usage.Forwards,
+      usage: Usage.ForwardsGetter,
+      ownerComponentFunction,
     };
 
     const panel: DrillerNode = {
@@ -40,7 +42,8 @@ describe("state flow tree", () => {
         line: 1,
       },
       type: "node",
-      usage: Usage.Forwards,
+      usage: Usage.ForwardsGetter,
+      ownerComponentFunction,
     };
 
     root.children.push(panel);
@@ -57,7 +60,8 @@ describe("state flow tree", () => {
         line: 1,
       },
       type: "node",
-      usage: Usage.Forwards,
+      usage: Usage.ForwardsGetter,
+      ownerComponentFunction,
     };
 
     panel.children.push(counter);

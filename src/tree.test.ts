@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { Usage, type DrillerNode, type DrillerRoot } from "./node";
-import type { ts } from "ts-morph";
+import type ts from "typescript";
 import { collectConsumers } from "./tree";
 
 describe("tree", () => {
@@ -13,6 +13,7 @@ describe("tree", () => {
 
     const countSymbol = {} as ts.Symbol;
     const setCountSymbol = {} as ts.Symbol;
+    const ownerComponentFunction = {} as ts.FunctionDeclaration;
 
     const root: DrillerRoot = {
       children: [],
@@ -26,7 +27,8 @@ describe("tree", () => {
         line: 1,
       },
       type: "root",
-      usage: Usage.Forwards,
+      usage: Usage.ForwardsGetter,
+      ownerComponentFunction,
     };
 
     const panel: DrillerNode = {
@@ -41,7 +43,8 @@ describe("tree", () => {
         line: 1,
       },
       type: "node",
-      usage: Usage.Forwards,
+      usage: Usage.ForwardsGetter,
+      ownerComponentFunction,
     };
 
     root.children.push(panel);
@@ -59,6 +62,7 @@ describe("tree", () => {
       },
       type: "node",
       usage: Usage.Gets | Usage.Sets,
+      ownerComponentFunction,
     };
 
     panel.children.push(counter);

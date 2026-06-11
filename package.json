@@ -2,7 +2,10 @@
   "name": "react-driller",
   "module": "index.ts",
   "type": "module",
-  "private": true,
+  "private": false,
+  "bin": {
+    "react-driller": "./src/cli.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
@@ -11,5 +14,23 @@
   },
   "dependencies": {
     "ts-morph": "^28.0.0"
-  }
+  },
+  "version": "0.0.1-alpha.0",
+  "description": "bye prop drilling",
+  "main": "index.js",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "cli": "bun run typecheck && bun src/cli.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/reillyjodonnell/react-driller.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/reillyjodonnell/react-driller/issues"
+  },
+  "homepage": "https://github.com/reillyjodonnell/react-driller#readme"
 }
