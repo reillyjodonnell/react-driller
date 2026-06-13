@@ -1,26 +1,34 @@
 import ts from "typescript";
 import path from "node:path";
 
-export function generateSetup({ filePath }: { filePath: string }): {
-  sourceFile: ts.SourceFile;
+export function generateSetup({ filePaths }: { filePaths: string[] }): {
+  sourceFiles: Map<string, ts.SourceFile>;
   checker: ts.TypeChecker;
   program: ts.Program;
 } {
-  const absPath = path.resolve(process.cwd(), filePath);
-  const options = resolveCompilerOptions(absPath);
+  if (filePaths.length === 0) {
+    throw new Error("generateSetup requires at least one file");
+  }
+
+  const absPaths = filePaths.map((p) => path.resolve(process.cwd(), p));
+  const options = resolveCompilerOptions(absPaths[0]!);
 
   const program = ts.createProgram({
-    rootNames: [absPath],
+    rootNames: absPaths,
     options,
   });
 
-  const sourceFile = program.getSourceFile(absPath);
-  if (!sourceFile) {
-    throw new Error(`could not load source file: ${absPath}`);
+  const sourceFiles = new Map<string, ts.SourceFile>();
+  for (const absPath of absPaths) {
+    const sourceFile = program.getSourceFile(absPath);
+    if (!sourceFile) {
+      throw new Error(`could not load source file: ${absPath}`);
+    }
+    sourceFiles.set(absPath, sourceFile);
   }
 
   return {
-    sourceFile,
+    sourceFiles,
     checker: program.getTypeChecker(),
     program,
   };

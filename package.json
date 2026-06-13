@@ -1,6 +1,6 @@
 {
   "name": "react-driller",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "bye prop drilling",
   "type": "module",
   "bin": {

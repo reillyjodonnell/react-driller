@@ -22,70 +22,79 @@ function stateName(root: DrillerRoot): string {
   return first?.getName() ?? "<anonymous>";
 }
 
-export function startEngine(filePath: string) {
-  const { checker, sourceFile } = generateSetup({ filePath });
+export function startEngine(filePaths: string[]) {
+  const { checker, sourceFiles } = generateSetup({ filePaths });
 
-  const roots = useStateExtractor(sourceFile, checker);
+  let anyRoots = false;
 
-  if (roots.length === 0) {
-    console.log(`  ${dim("no useState calls found")}`);
-    console.log();
-    return;
-  }
+  for (const [absPath, sourceFile] of sourceFiles) {
+    const roots = useStateExtractor(sourceFile, checker);
+    if (roots.length === 0) continue;
 
-  for (const root of roots) {
-    let queue: Array<DrillerRoot | DrillerNode> = [root];
-    while (queue.length) {
-      const node = queue.shift();
-      if (node) scanNode(node, checker, queue);
+    anyRoots = true;
+
+    for (const root of roots) {
+      let queue: Array<DrillerRoot | DrillerNode> = [root];
+      while (queue.length) {
+        const node = queue.shift();
+        if (node) scanNode(node, checker, queue);
+      }
     }
-  }
 
-  const groups = new Map<string, DrillerRoot[]>();
-  for (const root of roots) {
-    const existing = groups.get(root.name);
-    if (existing) existing.push(root);
-    else groups.set(root.name, [root]);
-  }
+    const groups = new Map<string, DrillerRoot[]>();
+    for (const root of roots) {
+      const existing = groups.get(root.name);
+      if (existing) existing.push(root);
+      else groups.set(root.name, [root]);
+    }
 
-  for (const [component, componentRoots] of groups) {
-    console.log(
-      `  ${bold(component)}  ${dim(formatLocation(componentRoots[0]!.source))}`,
-    );
+    console.log(`  ${dim(path.relative(process.cwd(), absPath))}`);
     console.log();
 
-    type Row = {
-      loc: string;
-      name: string;
-      verdict: string;
-    };
+    for (const [component, componentRoots] of groups) {
+      console.log(
+        `  ${bold(component)}  ${dim(formatLocation(componentRoots[0]!.source))}`,
+      );
+      console.log();
 
-    const rows: Row[] = componentRoots.map((root) => {
-      const lca = retrieveLeastCommonAncestorFromRoot(root);
-      const name = stateName(root);
-      const loc = formatLocation(root.source);
-      if (lca === root) {
+      type Row = {
+        loc: string;
+        name: string;
+        verdict: string;
+      };
+
+      const rows: Row[] = componentRoots.map((root) => {
+        const lca = retrieveLeastCommonAncestorFromRoot(root);
+        const name = stateName(root);
+        const loc = formatLocation(root.source);
+        if (lca === root) {
+          return {
+            loc,
+            name,
+            verdict: `${green("✓")} in ${bold(root.name)}`,
+          };
+        }
         return {
           loc,
           name,
-          verdict: `${green("✓")} in ${bold(root.name)}`,
+          verdict: `${bold(root.name)} ${yellow("→")} ${bold(lca.name)}  ${dim(formatLocation(lca.source))}`,
         };
+      });
+
+      const locWidth = Math.max(...rows.map((r) => r.loc.length));
+      const nameWidth = Math.max(...rows.map((r) => r.name.length + 2)); // backticks
+
+      for (const row of rows) {
+        const locCol = dim(row.loc.padEnd(locWidth));
+        const nameCol = `\`${row.name}\``.padEnd(nameWidth);
+        console.log(`    ${locCol}  ${nameCol}  ${row.verdict}`);
       }
-      return {
-        loc,
-        name,
-        verdict: `${bold(root.name)} ${yellow("→")} ${bold(lca.name)}  ${dim(formatLocation(lca.source))}`,
-      };
-    });
-
-    const locWidth = Math.max(...rows.map((r) => r.loc.length));
-    const nameWidth = Math.max(...rows.map((r) => r.name.length + 2)); // backticks
-
-    for (const row of rows) {
-      const locCol = dim(row.loc.padEnd(locWidth));
-      const nameCol = `\`${row.name}\``.padEnd(nameWidth);
-      console.log(`    ${locCol}  ${nameCol}  ${row.verdict}`);
+      console.log();
     }
+  }
+
+  if (!anyRoots) {
+    console.log(`  ${dim("no useState calls found")}`);
     console.log();
   }
 }
