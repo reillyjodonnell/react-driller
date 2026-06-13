@@ -44,14 +44,16 @@ export function useStateExtractor(
           }
           const componentOwner = getEnclosingComponentFunction(node);
 
-          if (!componentOwner)
-            throw new Error(
-              "no op - components should always be found in a useState. Harden logic around component detection for useState call",
-            );
+          // A useState whose enclosing component can't be resolved (e.g. a
+          // top-level module call, or a call inside a non-component function
+          // we don't model) is a shape we can't classify rather than a bug.
+          // Skip this occurrence and keep walking the AST instead of aborting
+          // the whole scan.
+          const ownerSymbol = componentOwner
+            ? getFunctionOwnerSymbol(componentOwner, checker)
+            : undefined;
 
-          const ownerSymbol = getFunctionOwnerSymbol(componentOwner, checker);
-
-          if (ownerSymbol && valueSymbol) {
+          if (componentOwner && ownerSymbol && valueSymbol) {
             const sourceFile = node.getSourceFile();
             const pos = node.getStart(sourceFile);
             const { line, character } =
