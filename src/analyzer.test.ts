@@ -682,3 +682,97 @@ describe("LCA edge cases", () => {
     expect(lca.name).toBe("Middle");
   });
 });
+
+describe("non-named component shapes (arrow + function expression)", () => {
+  function build(source: string) {
+    const { sourceFile, checker } = createFixture({
+      fileName: "app.tsx",
+      source,
+    });
+    const roots = useStateExtractor(sourceFile, checker);
+    for (const root of roots) {
+      const queue: Array<DrillerRoot | DrillerNode> = [root];
+      while (queue.length) {
+        const node = queue.shift();
+        if (node) scanNode(node, checker, queue);
+      }
+    }
+    return roots;
+  }
+
+  it("captures useState inside an arrow-function component", () => {
+    const roots = build(`
+      const App = () => {
+        const [count, setCount] = useState(0);
+        return <span>{count}</span>;
+      };
+    `);
+    expect(roots).toHaveLength(1);
+    expect(roots[0]?.name).toBe("App");
+  });
+
+  it("captures useState inside a function-expression component", () => {
+    const roots = build(`
+      const App = function () {
+        const [count, setCount] = useState(0);
+        return <span>{count}</span>;
+      };
+    `);
+    expect(roots).toHaveLength(1);
+    expect(roots[0]?.name).toBe("App");
+  });
+
+  it("captures useState inside a named function-expression component", () => {
+    const roots = build(`
+      const App = function App() {
+        const [count, setCount] = useState(0);
+        return <span>{count}</span>;
+      };
+    `);
+    expect(roots).toHaveLength(1);
+    expect(roots[0]?.name).toBe("App");
+  });
+
+  it("tracks drilling out of an arrow component the same as a function declaration", () => {
+    const roots = build(`
+      const App = () => {
+        const [count, setCount] = useState(0);
+        return <Child count={count} />;
+      };
+      function Child({ count }) {
+        return <span>{count}</span>;
+      }
+    `);
+    expect(roots).toHaveLength(1);
+    const [root] = roots;
+    expect(root?.children).toHaveLength(1);
+    expect(root?.children[0]?.name).toBe("Child");
+    expect(root?.children[0]?.usage).toBe(Usage.Gets);
+  });
+
+  it("computes LCA correctly for an arrow component that drills through a middle layer", () => {
+    const [root] = build(`
+      const App = () => {
+        const [count, setCount] = useState(0);
+        return <Middle count={count} setCount={setCount} />;
+      };
+      function Middle({ count, setCount }) {
+        return (
+          <>
+            <Display count={count} />
+            <Controls setCount={setCount} />
+          </>
+        );
+      }
+      function Display({ count }) {
+        return <span>{count}</span>;
+      }
+      function Controls({ setCount }) {
+        return <button onClick={() => setCount(0)}>r</button>;
+      }
+    `);
+    if (!root) throw new Error("expected a root");
+    const lca = retrieveLeastCommonAncestorFromRoot(root);
+    expect(lca.name).toBe("Middle");
+  });
+});

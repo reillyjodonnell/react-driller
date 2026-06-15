@@ -93,11 +93,39 @@ type ComponentFn =
   | ts.ArrowFunction;
 
 function isComponentFn(n: ts.Node): n is ComponentFn {
-  return (
-    ts.isFunctionDeclaration(n) ||
-    ts.isFunctionExpression(n) ||
-    ts.isArrowFunction(n)
-  );
+  if (
+    !(
+      ts.isFunctionDeclaration(n) ||
+      ts.isFunctionExpression(n) ||
+      ts.isArrowFunction(n)
+    )
+  ) {
+    return false;
+  }
+  // require a PascalCase name to count as a component
+  const name = getFunctionName(n);
+  return name !== undefined && isPascalCase(name);
+}
+
+function getFunctionName(fn: ComponentFn): string | undefined {
+  // outer binding (what JSX consumers reference) wins:
+  // const App = () => {...}  OR  const App = function() {...}  OR  const Outer = function Inner() {...}
+  if (
+    (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
+    ts.isVariableDeclaration(fn.parent) &&
+    ts.isIdentifier(fn.parent.name)
+  ) {
+    return fn.parent.name.text;
+  }
+  // function App() {...}  → fn.name is the Identifier "App"
+  if (ts.isFunctionDeclaration(fn) && fn.name) {
+    return fn.name.text;
+  }
+  // named function expression with no outer binding (rare)
+  if (ts.isFunctionExpression(fn) && fn.name) {
+    return fn.name.text;
+  }
+  return undefined;
 }
 
 export function scanNode(
@@ -298,10 +326,22 @@ function getFunctionOwnerSymbol(
   fn: ts.SignatureDeclaration,
   checker: ts.TypeChecker,
 ): ts.Symbol | undefined {
+  // outer binding (what JSX consumers see) wins, so the symbol matches
+  // whatever <App /> resolves to downstream
+  if (
+    (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
+    ts.isVariableDeclaration(fn.parent) &&
+    ts.isIdentifier(fn.parent.name)
+  ) {
+    return checker.getSymbolAtLocation(fn.parent.name);
+  }
   if (ts.isFunctionDeclaration(fn) && fn.name) {
     return checker.getSymbolAtLocation(fn.name);
   }
-
+  // named function expression with no outer binding (rare)
+  if (ts.isFunctionExpression(fn) && fn.name) {
+    return checker.getSymbolAtLocation(fn.name);
+  }
   return undefined;
 }
 
