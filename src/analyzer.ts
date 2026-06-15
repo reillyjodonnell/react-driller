@@ -155,7 +155,13 @@ export function scanNode(
             if (maybeNodeAttachedToJsxElement) {
               // find what component this is that's being passed
               const jsxAttribute = getEnclosingJsxAttribute(node);
-              const opening = jsxAttribute?.parent.parent;
+              if (!jsxAttribute) {
+                if (getterMatch) current.usage |= Usage.Gets;
+                if (setterMatch) current.usage |= Usage.Sets;
+                return; // exit this visit() call; nothing to drill
+              }
+
+              const opening = jsxAttribute.parent.parent;
               if (!opening) throw new Error("no op - check opening logic");
               const propName = jsxAttribute
                 ? ts.isIdentifier(jsxAttribute.name)
@@ -309,9 +315,11 @@ function getEnclosingJsxAttribute(node: ts.Node): ts.JsxAttribute | undefined {
     if (
       ts.isJsxElement(current) ||
       ts.isJsxFragment(current) ||
+      // did we walk all the way up
       ts.isSourceFile(current)
-    )
+    ) {
       return undefined;
+    }
     current = current.parent;
   }
 

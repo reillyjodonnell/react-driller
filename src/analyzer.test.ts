@@ -14,6 +14,22 @@ import {
   useStateExtractor,
 } from "./analyzer";
 
+function build(source: string) {
+  const { sourceFile, checker } = createFixture({
+    fileName: "app.tsx",
+    source,
+  });
+  const roots = useStateExtractor(sourceFile, checker);
+  for (const root of roots) {
+    const queue: Array<DrillerRoot | DrillerNode> = [root];
+    while (queue.length) {
+      const node = queue.shift();
+      if (node) scanNode(node, checker, queue);
+    }
+  }
+  return roots;
+}
+
 describe("state flow tree", () => {
   it("represents a basic prop-drilling path", () => {
     const { sourceFile, checker } = createFixture({
@@ -680,6 +696,26 @@ describe("LCA edge cases", () => {
 
     const lca = retrieveLeastCommonAncestorFromRoot(root);
     expect(lca.name).toBe("Middle");
+  });
+
+  it("handles the jsx as props pattern", () => {
+    const root = build(`
+      function Box(props: { d: React.ReactNode; children: React.ReactNode }) {
+        return <div>{props.children}</div>;
+      }
+
+      export function App() {
+        const [n] = useState(0);
+        return (
+          <Box d={<span>{n}</span>}>
+            <div />
+          </Box>
+        );
+      }
+    `);
+
+    const lca = retrieveLeastCommonAncestorFromRoot(root);
+    expect(lca.name).toBe("App");
   });
 });
 
