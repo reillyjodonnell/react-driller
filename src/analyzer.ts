@@ -1,6 +1,12 @@
 import { debuglog } from "node:util";
 import ts from "typescript";
-import { createDrillerNode, hasGetOrSet, Usage, type DrillerNode, type DrillerRoot } from "./node";
+import {
+  createDrillerNode,
+  hasGetOrSet,
+  Usage,
+  type DrillerNode,
+  type DrillerRoot,
+} from "./node";
 
 // Opt-in diagnostics: no-op unless NODE_DEBUG=driller is set.
 // Each call marks a shape the analyzer can't handle and skips it instead of
@@ -9,7 +15,9 @@ const debug = debuglog("driller");
 
 function nodeLoc(node: ts.Node): string {
   const sf = node.getSourceFile();
-  const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+  const { line, character } = sf.getLineAndCharacterOfPosition(
+    node.getStart(sf),
+  );
   return `${sf.fileName}:${line + 1}:${character + 1}`;
 }
 
@@ -23,7 +31,10 @@ export function useStateExtractor(
 
   function visit(node: ts.Node) {
     if (ts.isCallExpression(node) && isStateHookCall(node, stateHookNames)) {
-      if (ts.isVariableDeclaration(node.parent) && ts.isArrayBindingPattern(node.parent.name)) {
+      if (
+        ts.isVariableDeclaration(node.parent) &&
+        ts.isArrayBindingPattern(node.parent.name)
+      ) {
         const [valueBinding, setterBinding] = node.parent.name.elements;
 
         if (
@@ -54,7 +65,10 @@ export function useStateExtractor(
             : undefined;
           if (!componentOwner) {
             // e.g. useState inside a custom hook (camelCase, not a component)
-            debug("skip: useState with no enclosing component — %s", nodeLoc(node));
+            debug(
+              "skip: useState with no enclosing component — %s",
+              nodeLoc(node),
+            );
             ts.forEachChild(node, (child) => visit(child));
             return;
           }
@@ -62,13 +76,16 @@ export function useStateExtractor(
           if (componentOwner && ownerSymbol && valueSymbol) {
             const sourceFile = node.getSourceFile();
             const pos = node.getStart(sourceFile);
-            const { line, character } = sourceFile.getLineAndCharacterOfPosition(pos);
+            const { line, character } =
+              sourceFile.getLineAndCharacterOfPosition(pos);
 
             roots.push({
               children: [],
               name: ownerSymbol.getName(),
               parent: null,
-              setter: maybeSetterSymbol ? new Set([maybeSetterSymbol]) : new Set(),
+              setter: maybeSetterSymbol
+                ? new Set([maybeSetterSymbol])
+                : new Set(),
               getter: new Set([valueSymbol]),
               source: {
                 column: character + 1,
@@ -97,7 +114,10 @@ export function useStateExtractor(
 // plays the setter's role — so both flow through the extractor identically.
 const STATE_HOOKS = new Set(["useState", "useReducer"]);
 
-function isStateHookCall(node: ts.CallExpression, hookNames: Set<string>): boolean {
+function isStateHookCall(
+  node: ts.CallExpression,
+  hookNames: Set<string>,
+): boolean {
   // R.useState(...) / React.useReducer(...): match on the property name.
   // Namespace and default imports both land here.
   if (
@@ -130,7 +150,11 @@ function collectStateHookNames(sourceFile: ts.SourceFile): Set<string> {
       }
     }
     // function useState(...) {}  →  a local declaration shadows the hook
-    if (ts.isFunctionDeclaration(node) && node.name && STATE_HOOKS.has(node.name.text)) {
+    if (
+      ts.isFunctionDeclaration(node) &&
+      node.name &&
+      STATE_HOOKS.has(node.name.text)
+    ) {
       shadowed.add(node.name.text);
     }
     // const u = useState  →  pick up the re-binding
@@ -152,10 +176,19 @@ function collectStateHookNames(sourceFile: ts.SourceFile): Set<string> {
   return names;
 }
 
-type ComponentFn = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction;
+type ComponentFn =
+  | ts.FunctionDeclaration
+  | ts.FunctionExpression
+  | ts.ArrowFunction;
 
 function isComponentFn(n: ts.Node): n is ComponentFn {
-  if (!(ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n))) {
+  if (
+    !(
+      ts.isFunctionDeclaration(n) ||
+      ts.isFunctionExpression(n) ||
+      ts.isArrowFunction(n)
+    )
+  ) {
     return false;
   }
   // require a PascalCase name to count as a component
@@ -167,7 +200,9 @@ function isComponentFn(n: ts.Node): n is ComponentFn {
 // (through any memo()/forwardRef() wrapper), or the function's own name for a
 // declaration / named function expression. The display name (.text) and the
 // owner symbol are both read off this one identifier, so the two can't drift.
-function maybeComponentNameIdentifier(fn: ComponentFn): ts.Identifier | undefined {
+function maybeComponentNameIdentifier(
+  fn: ComponentFn,
+): ts.Identifier | undefined {
   // read through any memo()/forwardRef() wrapper to the bound variable
   if (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) {
     const binding = maybeBindingThroughHOCWrapper(fn);
@@ -194,7 +229,11 @@ function maybeBindingThroughHOCWrapper(fn: ts.Node): ts.Identifier | undefined {
   while (current && ts.isCallExpression(current)) {
     current = current.parent;
   }
-  if (current && ts.isVariableDeclaration(current) && ts.isIdentifier(current.name)) {
+  if (
+    current &&
+    ts.isVariableDeclaration(current) &&
+    ts.isIdentifier(current.name)
+  ) {
     return current.name;
   }
   return undefined;
@@ -206,8 +245,54 @@ export function scanNode(
   queue: Array<DrillerRoot | DrillerNode>,
 ) {
   const fn = current.ownerComponentFunction;
+
+  // <Child {...props} /> — resolve the spread to the object it forwards and
+  // route any of this state's getter/setter it carries to the child, keyed by
+  // the property the child destructures. Covers an inline `{...{ count }}` and
+  // a local `const props = { count }; <Child {...props} />`.
+  function forwardSpread(spread: ts.JsxSpreadAttribute) {
+    const object = resolveSpreadObject(spread.expression, checker);
+    if (!object) {
+      debug(
+        "skip: spread is not a statically-resolvable object — %s",
+        nodeLoc(spread),
+      );
+      return;
+    }
+    const opening = spread.parent.parent;
+    const childFn = resolveComponentFn(opening.tagName, checker);
+    for (const prop of object.properties) {
+      const entry = spreadPropEntry(prop, checker);
+      if (!entry) continue;
+      const getterMatch = current.getter.has(entry.valueSymbol);
+      const setterMatch = current.setter.has(entry.valueSymbol);
+      if (!getterMatch && !setterMatch) continue;
+      if (!childFn) {
+        // spread onto a host element → the state is used here
+        if (getterMatch) current.usage |= Usage.Gets;
+        if (setterMatch) current.usage |= Usage.Sets;
+        continue;
+      }
+      forwardToChild(
+        current,
+        childFn,
+        opening,
+        entry.keyName,
+        getterMatch,
+        setterMatch,
+        checker,
+        queue,
+        spread,
+      );
+    }
+  }
+
   // go to node's function body
   function visit(node: ts.Node) {
+    if (ts.isJsxSpreadAttribute(node)) {
+      forwardSpread(node);
+    }
+
     if (ts.isIdentifier(node)) {
       const symbol = checker.getSymbolAtLocation(node);
 
@@ -215,122 +300,55 @@ export function scanNode(
         const getterMatch = current.getter.has(symbol);
         const setterMatch = current.setter.has(symbol);
 
-        // pass over the getter and setter from the useState declaration
-        const isDeclarationName = ts.isBindingElement(node.parent) && node.parent.name === node;
+        // pass over the getter and setter from the state-hook declaration
+        const isDeclarationName =
+          ts.isBindingElement(node.parent) && node.parent.name === node;
 
         if (!isDeclarationName) {
-          if (ts.isJsxExpression(node.parent)) {
-            // the grandparent should be a jsx attribute (need to confirm if it's 100% of time)
-            const maybeNodeAttachedToJsxElement = nodeAttachedToJsxElement(node);
-            if (maybeNodeAttachedToJsxElement) {
-              // find what component this is that's being passed
-              const jsxAttribute = getEnclosingJsxAttribute(node);
-              if (!jsxAttribute) {
-                if (getterMatch) current.usage |= Usage.Gets;
-                if (setterMatch) current.usage |= Usage.Sets;
-                return; // exit this visit() call; nothing to drill
-              }
+          if (
+            ts.isJsxExpression(node.parent) &&
+            nodeAttachedToJsxElement(node)
+          ) {
+            // <Child prop={count} />
+            const jsxAttribute = getEnclosingJsxAttribute(node);
+            if (!jsxAttribute) {
+              if (getterMatch) current.usage |= Usage.Gets;
+              if (setterMatch) current.usage |= Usage.Sets;
+              return; // exit this visit() call; nothing to drill
+            }
 
-              const opening = jsxAttribute.parent.parent;
-              if (!opening) {
-                debug("skip: JSX attribute with no opening element — %s", nodeLoc(node));
-                return;
-              }
-              const propName = jsxAttribute
-                ? ts.isIdentifier(jsxAttribute.name)
-                  ? jsxAttribute.name.text
-                  : undefined
-                : undefined;
+            const opening = jsxAttribute.parent.parent;
+            const propName = ts.isIdentifier(jsxAttribute.name)
+              ? jsxAttribute.name.text
+              : undefined;
+            const childFn = resolveComponentFn(opening.tagName, checker);
 
-              const childFn = resolveComponentFn(opening.tagName, checker); // jump
-
-              if (!childFn) {
-                /* host element → treat as use */
-              } else if (!getterMatch && !setterMatch) {
-                /* identifier sits on a JSX attribute but isn't this state's
-                   getter/setter — nothing to forward, skip without creating a child */
-              } else {
-                const newSymbol = childFn && matchPropBinding(childFn, propName ?? "", checker);
-
-                if (!newSymbol) {
-                  debug(
-                    "skip: prop %s didn't resolve to a child binding — %s",
-                    propName ?? "?",
-                    nodeLoc(node),
-                  );
-                  return;
-                }
-
-                // Name the child by the JSX tag the consumer wrote. childFn.name
-                // only exists for declarations / named function expressions; for
-                // `const C = () => {}` or `const C = memo(() => {})` it is
-                // undefined, so falling back to the tag (rather than the matched
-                // prop's symbol) keeps the component's real name.
-                const tag = opening.tagName;
-                const name =
-                  childFn.name?.text ?? (ts.isIdentifier(tag) ? tag.text : tag.getText());
-
-                if (!name) {
-                  debug("skip: child component has no resolvable name — %s", nodeLoc(node));
-                  return;
-                }
-
-                // we treat getter and setter separately, so this logic will run twice for
-                // something like <MainPanel count={count} setCount={setCount} />
-                // so we will need to make sure it doesn't already have an entry
-                const existing = current.children.find((child) => child.jsxElement === opening);
-
-                let childSource;
-                if (!existing) {
-                  const childSourceFile = childFn.getSourceFile();
-                  const childPos = childFn.getStart(childSourceFile);
-                  const { line: cl, character: cc } =
-                    childSourceFile.getLineAndCharacterOfPosition(childPos);
-                  childSource = {
-                    column: cc + 1,
-                    file: childSourceFile.fileName,
-                    line: cl + 1,
-                  };
-                }
-
-                const child: DrillerNode = existing
-                  ? existing
-                  : createDrillerNode({
-                      name,
-                      parent: current,
-                      ownerComponentFunction: childFn,
-                      jsxElement: opening,
-                      source: childSource!,
-                    });
-                if (getterMatch) {
-                  child.getter.add(newSymbol!);
-                  current.usage |= Usage.ForwardsGetter;
-                }
-                if (setterMatch) {
-                  child.setter.add(newSymbol);
-                  current.usage |= Usage.ForwardsSetter;
-                }
-
-                if (!existing) {
-                  current.children.push(child);
-                  queue.push(child);
-                }
-              }
+            if (!childFn) {
+              /* host element → treat as use */
+            } else if (!getterMatch && !setterMatch) {
+              /* identifier sits on a JSX attribute but isn't this state's
+                 getter/setter — nothing to forward, skip without creating a child */
+            } else if (propName === undefined) {
+              debug(
+                "skip: JSX attribute with no resolvable name — %s",
+                nodeLoc(node),
+              );
             } else {
-              if (getterMatch) {
-                current.usage |= Usage.Gets;
-              }
-              if (setterMatch) {
-                current.usage |= Usage.Sets;
-              }
+              forwardToChild(
+                current,
+                childFn,
+                opening,
+                propName,
+                getterMatch,
+                setterMatch,
+                checker,
+                queue,
+                node,
+              );
             }
           } else {
-            if (getterMatch) {
-              current.usage |= Usage.Gets;
-            }
-            if (setterMatch) {
-              current.usage |= Usage.Sets;
-            }
+            if (getterMatch) current.usage |= Usage.Gets;
+            if (setterMatch) current.usage |= Usage.Sets;
           }
         }
       }
@@ -341,6 +359,117 @@ export function scanNode(
   if (fn.body) {
     visit(fn.body);
   }
+}
+
+function forwardToChild(
+  current: DrillerRoot | DrillerNode,
+  childFn: ComponentFn,
+  opening: ts.JsxOpeningLikeElement,
+  propName: string,
+  getterMatch: boolean,
+  setterMatch: boolean,
+  checker: ts.TypeChecker,
+  queue: Array<DrillerRoot | DrillerNode>,
+  node: ts.Node,
+): void {
+  const newSymbol = matchPropBinding(childFn, propName, checker);
+  if (!newSymbol) {
+    debug(
+      "skip: prop %s didn't resolve to a child binding — %s",
+      propName,
+      nodeLoc(node),
+    );
+    return;
+  }
+
+  // Name the child by the JSX tag the consumer wrote. childFn.name only exists
+  // for declarations / named function expressions; for `const C = () => {}` or
+  // `const C = memo(() => {})` it is undefined, so falling back to the tag
+  // (rather than the matched prop's symbol) keeps the component's real name.
+  const tag = opening.tagName;
+  const name =
+    childFn.name?.text ?? (ts.isIdentifier(tag) ? tag.text : tag.getText());
+  if (!name) {
+    debug("skip: child component has no resolvable name — %s", nodeLoc(node));
+    return;
+  }
+
+  // getter and setter are forwarded separately, so this can run twice for the
+  // same element (e.g. <Panel count={count} setCount={setCount} />) — dedupe by
+  // the JSX element so it stays one child node.
+  const existing = current.children.find(
+    (child) => child.jsxElement === opening,
+  );
+
+  let childSource;
+  if (!existing) {
+    const childSourceFile = childFn.getSourceFile();
+    const childPos = childFn.getStart(childSourceFile);
+    const { line: cl, character: cc } =
+      childSourceFile.getLineAndCharacterOfPosition(childPos);
+    childSource = {
+      column: cc + 1,
+      file: childSourceFile.fileName,
+      line: cl + 1,
+    };
+  }
+
+  const child: DrillerNode = existing
+    ? existing
+    : createDrillerNode({
+        name,
+        parent: current,
+        ownerComponentFunction: childFn,
+        jsxElement: opening,
+        source: childSource!,
+      });
+
+  if (getterMatch) {
+    child.getter.add(newSymbol);
+    current.usage |= Usage.ForwardsGetter;
+  }
+  if (setterMatch) {
+    child.setter.add(newSymbol);
+    current.usage |= Usage.ForwardsSetter;
+  }
+
+  if (!existing) {
+    current.children.push(child);
+    queue.push(child);
+  }
+}
+
+// A JSX spread (`{...expr}`) forwards an object's props. Resolve it to the
+// object literal it carries when that's statically knowable: an inline
+// `{...{ count }}` or an identifier bound to one (`const props = { count }`).
+function resolveSpreadObject(
+  expr: ts.Expression,
+  checker: ts.TypeChecker,
+): ts.ObjectLiteralExpression | undefined {
+  if (ts.isObjectLiteralExpression(expr)) return expr;
+  if (ts.isIdentifier(expr)) {
+    const decl = checker.getSymbolAtLocation(expr)?.valueDeclaration;
+    if (
+      decl &&
+      ts.isVariableDeclaration(decl) &&
+      decl.initializer &&
+      ts.isObjectLiteralExpression(decl.initializer)
+    ) {
+      return decl.initializer;
+    }
+  }
+  return undefined;
+}
+
+function spreadPropEntry(
+  prop: ts.ObjectLiteralElementLike,
+  checker: ts.TypeChecker,
+): { keyName: string; valueSymbol: ts.Symbol } | undefined {
+  if (ts.isShorthandPropertyAssignment(prop)) {
+    const valueSymbol = checker.getShorthandAssignmentValueSymbol(prop);
+    if (valueSymbol) return { keyName: prop.name.text, valueSymbol };
+  }
+  return undefined;
 }
 
 function resolveComponentFn(
@@ -354,7 +483,11 @@ function resolveComponentFn(
   const decl = sym.valueDeclaration ?? sym.declarations?.[0];
   if (!decl) return undefined;
 
-  if (ts.isFunctionDeclaration(decl) || ts.isArrowFunction(decl) || ts.isFunctionExpression(decl)) {
+  if (
+    ts.isFunctionDeclaration(decl) ||
+    ts.isArrowFunction(decl) ||
+    ts.isFunctionExpression(decl)
+  ) {
     return decl;
   }
   // const Child = () => {...} / function () {...} / memo(() => {...}) /
@@ -413,7 +546,10 @@ function isPascalCase(name: string): boolean {
 
 // The symbol `<App />` consumers resolve to — read off the same identifier
 // that names the component, so name and owner symbol always agree.
-function getFunctionOwnerSymbol(fn: ComponentFn, checker: ts.TypeChecker): ts.Symbol | undefined {
+function getFunctionOwnerSymbol(
+  fn: ComponentFn,
+  checker: ts.TypeChecker,
+): ts.Symbol | undefined {
   const id = maybeComponentNameIdentifier(fn);
   return id ? checker.getSymbolAtLocation(id) : undefined;
 }
@@ -453,7 +589,11 @@ function matchPropBinding(
       // propertyName is set only when renamed: { value: v }
       const key = el.propertyName ?? el.name;
 
-      if (ts.isIdentifier(key) && key.text === propName && ts.isIdentifier(el.name)) {
+      if (
+        ts.isIdentifier(key) &&
+        key.text === propName &&
+        ts.isIdentifier(el.name)
+      ) {
         return checker.getSymbolAtLocation(el.name); // ← the local binding
       }
     }
@@ -464,7 +604,9 @@ function matchPropBinding(
   return undefined;
 }
 
-export function retrieveClosestCommonParentFromRoot(root: DrillerRoot): DrillerRoot | DrillerNode {
+export function retrieveClosestCommonParentFromRoot(
+  root: DrillerRoot,
+): DrillerRoot | DrillerNode {
   if (hasGetOrSet(root.usage)) {
     return root;
   }

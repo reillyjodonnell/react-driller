@@ -825,10 +825,26 @@ describe("scanNode — how state flows", () => {
       expect(root.children.length).toBe(0);
     });
 
-    // Spread props are pervasive. The getter symbol only ever appears inside an
-    // object literal / spread, never as the direct child of a JsxExpression on
-    // an attribute, so no child is created and the state looks local.
-    it("misses drilling when state is forwarded via {...spread}", () => {
+    // The aliased spread form `<Child {...{ key: state }} />` is not tracked:
+    // the bare `state` reference inside the object would be double-counted as a
+    // local read, so only the shorthand `{ state }` form is forwarded (below).
+    it("misses drilling for an aliased spread key ({ alias: state })", () => {
+      const [root] = analyzeRoots(`
+      import { useState } from "react";
+      function App() {
+        const [count, setCount] = useState(0);
+        return <Display {...{ value: count }} />;
+      }
+      function Display({ value }) { return <span>{value}</span>; }
+    `);
+      expect(root?.children).toHaveLength(0); // FLIP when aliased spread keys are tracked
+    });
+  });
+
+  describe("spread props", () => {
+    // <Panel {...props} /> with `const props = { count, setCount }` forwards
+    // count into Panel via the shorthand key, so the drill is detected.
+    it("forwards state through a spread of a local object", () => {
       const [root] = analyzeRoots(`
       import { useState } from "react";
       function App() {
@@ -839,17 +855,32 @@ describe("scanNode — how state flows", () => {
       function Panel({ count }) { return <Display count={count} />; }
       function Display({ count }) { return <span>{count}</span>; }
     `);
-      expect(root?.children).toHaveLength(0); // FLIP when spread forwarding is tracked
-      // Even subtler: the shorthand `{ count }` resolves to the object's own
-      // property symbol, not the useState binding, so the state reads as fully
-      // unused (Usage.None) rather than even a local Gets.
-      expect(root?.usage).toBe(Usage.None);
+      expect(root?.usage).toBe(Usage.ForwardsGetter);
+      expect(root?.children).toHaveLength(1);
+      expect(root?.children[0]?.name).toBe("Panel");
     });
 
-    // Passing state as element children (`<Layout>{count}</Layout>`) is a real
-    // form of drilling, but the identifier is not on a JSX *attribute*, so it is
-    // recorded as a local Gets rather than a forward into Layout.
-    it("misses drilling when state is passed as JSX children content", () => {
+    it("forwards state through an inline object spread", () => {
+      const [root] = analyzeRoots(`
+      import { useState } from "react";
+      function App() {
+        const [count, setCount] = useState(0);
+        return <Display {...{ count }} />;
+      }
+      function Display({ count }) { return <span>{count}</span>; }
+    `);
+      expect(root?.children).toHaveLength(1);
+      expect(root?.children[0]?.name).toBe("Display");
+      expect(root?.children[0]?.usage).toBe(Usage.Gets);
+    });
+  });
+
+  describe("the children prop is composition, not drilling", () => {
+    // `<Layout>{count}</Layout>` reads `count` in App (App interpolates it into
+    // the JSX it returns); Layout only renders whatever ReactNode it's handed
+    // via props.children. So count correctly stays local — forwarding it into
+    // Layout would be a false positive. This pins that behavior.
+    it("keeps state local when passed as props.children", () => {
       const [root] = analyzeRoots(`
       import { useState } from "react";
       function App() {
@@ -858,7 +889,8 @@ describe("scanNode — how state flows", () => {
       }
       function Layout({ children }) { return <div>{children}</div>; }
     `);
-      expect(root?.children).toHaveLength(0); // FLIP when children-forwarding is tracked
+      expect(root?.usage).toBe(Usage.Gets);
+      expect(root?.children).toHaveLength(0);
     });
   });
 });

@@ -12,14 +12,14 @@ Each path may be a file or a directory. Directories are walked recursively for `
 
 ### Flags
 
-| Flag | Description |
-| --- | --- |
-| `-h`, `--help` | Show help. |
-| `-v`, `--version` | Print version. |
-| `--json` | Emit machine-readable output: exactly one JSON object on stdout and nothing else (no colors, no extra logs). |
-| `--fail-on <level>` | Set the exit code based on findings. See levels below. |
-| `--diff` | Scan only files that git reports as changed versus the base ref. |
-| `--diff-base <ref>` | Base ref for `--diff` (default `main`). Requires `--diff`. |
+| Flag                | Description                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `-h`, `--help`      | Show help.                                                                                                   |
+| `-v`, `--version`   | Print version.                                                                                               |
+| `--json`            | Emit machine-readable output: exactly one JSON object on stdout and nothing else (no colors, no extra logs). |
+| `--fail-on <level>` | Set the exit code based on findings. See levels below.                                                       |
+| `--diff`            | Scan only files that git reports as changed versus the base ref.                                             |
+| `--diff-base <ref>` | Base ref for `--diff` (default `main`). Requires `--diff`.                                                   |
 
 #### `--json`
 
@@ -63,10 +63,10 @@ All `file` fields (top-level and inside every `location`) are repo-relative, nev
 
 Controls the process exit code so react-driller can gate a commit or CI run.
 
-| Level | Behavior |
-| --- | --- |
-| `none` (default) | Always exit `0`. Preserves the default behavior. |
-| `findings` | Exit `1` when there is at least one drilling finding (a `useState` whose closest common parent differs from the component that declares it); otherwise exit `0`. |
+| Level            | Behavior                                                                                                                                                         |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `none` (default) | Always exit `0`. Preserves the default behavior.                                                                                                                 |
+| `findings`       | Exit `1` when there is at least one drilling finding (a `useState` whose closest common parent differs from the component that declares it); otherwise exit `0`. |
 
 An unrecognized level prints a clear error to stderr and exits `1`.
 
@@ -162,16 +162,17 @@ And your agent can fix it
 
 thanks for checking it out <3
 
-## What works today
+## What's supported
 
-- State-hook roots with array destructure: `const [v, setV] = useState(...)` and `const [state, dispatch] = useReducer(...)` — the useState setter function and the useReducer dispatch function are both tracked as the state's updater
+- State-hook roots: `const [v, setV] = useState(...)` and `const [s, dispatch] = useReducer(...)` (setter/dispatch tracked as the updater)
 - Function components: `function Foo()`, `const Foo = () => ...`, `const Foo = function() {}` (PascalCase)
-- HOC-wrapped components: `const Foo = memo(() => ...)`, `forwardRef(...)`, and arbitrary/curried HOCs (`withX(() => ...)`, `connect(opts)(() => ...)`) — both as state owners and as drilled-into children
+- HOC-wrapped components: `memo`, `forwardRef`, and curried HOCs (`withX(...)`, `connect(opts)(...)`) — as owners and as children
 - Cross-file traversal — follows alias symbols across imports via the TS checker
 - Read-vs-forward distinction per state value (separately for getter and setter)
 - Child prop destructure incl. renames (`{ value: v }`) and rest (`{ x, ...rest }`)
-- `children={<Inner v={v}/>}` pass-through
-- Closest-common-parent suggestion (where to *lift state up*) across multiple siblings
+- Spread props (shorthand keys): `<Child {...props} />` and `<Child {...{ count }} />`
+- `children` prop pass-through: `children={<Inner v={v}/>}`
+- Closest-common-parent suggestion (where to _lift state up_) across multiple siblings
 - Multiple `useState`s per component, multiple roots per file
 - Directory walking for `.tsx`/`.jsx` (ignores `node_modules`, `dist`, `.next`, …)
 
@@ -180,7 +181,7 @@ thanks for checking it out <3
 - Non-array destructure: `const s = useState(0); s[0]`
 - Custom hooks wrapping `useState`/`useReducer` (`const [v, setV] = useCounter()`)
 - Other state primitives: `useRef`, `useContext`, `useSyncExternalStore`
-- Spread props: `<Child {...props} />`
+- Aliased spread keys (`<Child {...{ alias: state }} />`) and rest-spread pass-through (`function W({ ...rest }) { return <Inner {...rest} /> }`)
 - Anonymous default exports (no binding to name): `export default () => {}`, `export default memo(() => ...)`
 - Barrel re-exports: `export { Foo } from "./foo"`
 - Namespaced JSX: `<motion.div>`, `<Foo.Bar>`
@@ -188,5 +189,5 @@ thanks for checking it out <3
 - Dynamic tag: `const Cmp = cond ? A : B; <Cmp />`
 - Class component children (`extends React.Component`)
 - Render-prop / children-as-function: `<Wrap>{(x) => <Inner v={v}/>}</Wrap>`
-- lowercase-named custom components (gated out by PascalCase rule)
+- lowercase-named custom components
 - `node_modules` components (will try to drill in)
