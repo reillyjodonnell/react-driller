@@ -1,9 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import {
-  FAIL_ON_LEVELS,
-  exitCodeFor,
-  validateFailOnLevel,
-} from "./failOn";
+import { FAIL_ON_LEVELS, exitCodeFor, validateFailOnLevel } from "./failOn";
 
 describe("exitCodeFor", () => {
   it("returns 0 for level 'none' even when drilling findings exist", () => {
@@ -11,21 +7,15 @@ describe("exitCodeFor", () => {
   });
 
   it("returns 1 for level 'findings' when there is at least one drilling finding", () => {
-    expect(exitCodeFor({ summary: { drillingFindings: 3 } }, "findings")).toBe(
-      1,
-    );
+    expect(exitCodeFor({ summary: { drillingFindings: 3 } }, "findings")).toBe(1);
   });
 
   it("returns 1 for level 'findings' on exactly one drilling finding", () => {
-    expect(exitCodeFor({ summary: { drillingFindings: 1 } }, "findings")).toBe(
-      1,
-    );
+    expect(exitCodeFor({ summary: { drillingFindings: 1 } }, "findings")).toBe(1);
   });
 
   it("returns 0 for level 'findings' when there are no drilling findings", () => {
-    expect(exitCodeFor({ summary: { drillingFindings: 0 } }, "findings")).toBe(
-      0,
-    );
+    expect(exitCodeFor({ summary: { drillingFindings: 0 } }, "findings")).toBe(0);
   });
 });
 

@@ -1,34 +1,7 @@
 import { describe, it, expect } from "bun:test";
-import {
-  createDrillerNode,
-  createRootDrillerNode,
-  Usage,
-  type DrillerNode,
-  type DrillerRoot,
-} from "./node";
-import ts from "typescript";
+import { Usage, type DrillerNode, type DrillerRoot } from "./node";
 import { createFixture } from "./test-utils";
-import {
-  retrieveLeastCommonAncestorFromRoot,
-  scanNode,
-  useStateExtractor,
-} from "./analyzer";
-
-function build(source: string) {
-  const { sourceFile, checker } = createFixture({
-    fileName: "app.tsx",
-    source,
-  });
-  const roots = useStateExtractor(sourceFile, checker);
-  for (const root of roots) {
-    const queue: Array<DrillerRoot | DrillerNode> = [root];
-    while (queue.length) {
-      const node = queue.shift();
-      if (node) scanNode(node, checker, queue);
-    }
-  }
-  return roots;
-}
+import { retrieveLeastCommonAncestorFromRoot, scanNode, useStateExtractor } from "./analyzer";
 
 describe("state flow tree", () => {
   it("represents a basic prop-drilling path", () => {
@@ -185,9 +158,7 @@ describe("state flow tree", () => {
     const child = root.children[0];
     expect(child?.children.length).toBe(1);
 
-    expect(root.children[0]?.usage).toStrictEqual(
-      Usage.Gets | Usage.ForwardsGetter,
-    );
+    expect(root.children[0]?.usage).toStrictEqual(Usage.Gets | Usage.ForwardsGetter);
     expect(child?.children[0]?.usage).toStrictEqual(Usage.Gets);
   });
 

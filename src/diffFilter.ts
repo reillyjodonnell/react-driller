@@ -34,9 +34,7 @@ function isUnderRoot(fileSegments: string[], root: string): boolean {
   // `src/App.tsx` matching the changed file `src/App.tsx`), which must be kept.
   // The segment compare below still rejects prefix accidents like `srcfoo`.
   if (fileSegments.length < rootSegments.length) return false;
-  return rootSegments.every(
-    (segment, index) => fileSegments[index] === segment,
-  );
+  return rootSegments.every((segment, index) => fileSegments[index] === segment);
 }
 
 /**
@@ -46,10 +44,7 @@ function isUnderRoot(fileSegments: string[], root: string): boolean {
  * segment-wise containment so prefix accidents like `src` vs `srcfoo`
  * do not leak through. Performs no git calls and no filesystem reads.
  */
-export function filterChangedFiles(
-  changedPaths: string[],
-  roots: string[],
-): string[] {
+export function filterChangedFiles(changedPaths: string[], roots: string[]): string[] {
   return changedPaths.filter((changedPath) => {
     if (!hasSourceExtension(changedPath)) return false;
 

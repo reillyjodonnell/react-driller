@@ -28,6 +28,7 @@ describe("state flow tree", () => {
       type: "root",
       usage: Usage.ForwardsGetter,
       ownerComponentFunction,
+      jsxElement: null,
     };
 
     const panel: DrillerNode = {
@@ -44,6 +45,7 @@ describe("state flow tree", () => {
       type: "node",
       usage: Usage.ForwardsGetter,
       ownerComponentFunction,
+      jsxElement: null,
     };
 
     root.children.push(panel);
@@ -62,6 +64,7 @@ describe("state flow tree", () => {
       type: "node",
       usage: Usage.ForwardsGetter,
       ownerComponentFunction,
+      jsxElement: null,
     };
 
     panel.children.push(counter);

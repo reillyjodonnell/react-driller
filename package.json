@@ -1,8 +1,24 @@
 {
   "name": "react-driller",
   "version": "0.1.3",
-  "description": "bye prop drilling",
-  "type": "module",
+  "description": "tells you where your useState should live (eliminates needless prop drilling)",
+  "keywords": [
+    "analyzer",
+    "lift-state",
+    "prop-drilling",
+    "react",
+    "useState"
+  ],
+  "homepage": "https://github.com/reillyjodonnell/react-driller#readme",
+  "bugs": {
+    "url": "https://github.com/reillyjodonnell/react-driller/issues"
+  },
+  "license": "ISC",
+  "author": "Reilly",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/reillyjodonnell/react-driller.git"
+  },
   "bin": {
     "react-driller": "./dist/cli.js"
   },
@@ -11,36 +27,25 @@
     "README.md",
     "LICENSE"
   ],
-  "engines": {
-    "node": ">=18"
-  },
+  "type": "module",
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run test",
     "cli": "bun run typecheck && bun src/cli.ts",
     "build": "bun build src/cli.ts --target=node --format=esm --outfile=dist/cli.js && chmod +x dist/cli.js",
     "prepublishOnly": "bun run build"
   },
-  "keywords": [
-    "react",
-    "useState",
-    "prop-drilling",
-    "lift-state",
-    "codemod",
-    "analyzer"
-  ],
   "devDependencies": {
     "@types/bun": "latest",
+    "oxfmt": "^0.54.0",
+    "oxlint": "^1.69.0",
     "typescript": "^5"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/reillyjodonnell/react-driller.git"
-  },
-  "author": "Reilly",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/reillyjodonnell/react-driller/issues"
-  },
-  "homepage": "https://github.com/reillyjodonnell/react-driller#readme"
+  "engines": {
+    "node": ">=18"
+  }
 }

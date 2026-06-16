@@ -6,12 +6,7 @@ import { fileURLToPath } from "node:url";
 import { analyzeFiles, type AnalysisResult } from "./analysis";
 import { filterChangedFiles } from "./diffFilter";
 import { startEngine } from "./engine";
-import {
-  FAIL_ON_LEVELS,
-  exitCodeFor,
-  validateFailOnLevel,
-  type FailOnLevel,
-} from "./failOn";
+import { FAIL_ON_LEVELS, exitCodeFor, validateFailOnLevel, type FailOnLevel } from "./failOn";
 import { renderJson } from "./jsonRenderer";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -59,7 +54,9 @@ function printHelp() {
   console.log(`    -h, --help          show this help`);
   console.log(`    -v, --version       print version`);
   console.log(`    --json              emit one JSON object on stdout, nothing else`);
-  console.log(`    --fail-on <level>   exit code policy: ${FAIL_ON_LEVELS.join(" | ")} (default none)`);
+  console.log(
+    `    --fail-on <level>   exit code policy: ${FAIL_ON_LEVELS.join(" | ")} (default none)`,
+  );
   console.log(`    --diff              scan only files changed vs the base ref`);
   console.log(`    --diff-base <ref>   base ref for --diff (default ${DEFAULT_DIFF_BASE})`);
   console.log();
@@ -118,11 +115,10 @@ function gitRepoRoot(): string {
 
 function gitChangedFiles(base: string): string[] {
   try {
-    const out = execFileSync(
-      "git",
-      ["diff", "--name-only", "--diff-filter=d", base],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
+    const out = execFileSync("git", ["diff", "--name-only", "--diff-filter=d", base], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
     return out
       .split("\n")
       .map((line) => line.trim())
@@ -191,7 +187,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg === "--diff-base") {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("-")) {
-        console.error(`${red("error")} --diff-base requires a git ref (e.g. main, origin/main, HEAD~1)`);
+        console.error(
+          `${red("error")} --diff-base requires a git ref (e.g. main, origin/main, HEAD~1)`,
+        );
         process.exit(1);
       }
       diffBase = value;

@@ -12,3 +12,5 @@ bun run cli src/    # run the tool locally against a path
 ```
 
 For a quick overview on how the analyzer actually works (the queue, the parent->child JSX flip), read [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+highly rec: [https://astexplorer.net/](https://astexplorer.net/)

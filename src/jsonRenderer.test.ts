@@ -64,18 +64,14 @@ describe("renderJson", () => {
   });
 
   it("marks a drilled state with a ThemeToggle suggested ancestor", () => {
-    const drilled = collectStates(parsed).find(
-      (state) => state.drilled === true,
-    );
+    const drilled = collectStates(parsed).find((state) => state.drilled === true);
     expect(drilled).toBeDefined();
     const suggested = asRecord(drilled!.suggestedAncestor);
     expect(suggested.name).toBe("ThemeToggle");
   });
 
   it("marks a co-located state as not drilled", () => {
-    const undrilled = collectStates(parsed).find(
-      (state) => state.drilled === false,
-    );
+    const undrilled = collectStates(parsed).find((state) => state.drilled === false);
     expect(undrilled).toBeDefined();
   });
 

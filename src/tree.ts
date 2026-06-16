@@ -1,8 +1,6 @@
 import { hasGet, hasSet, type DrillerNode, type DrillerRoot } from "./node";
 
-export function collectConsumers(
-  root: DrillerRoot,
-): Set<DrillerRoot | DrillerNode> {
+export function collectConsumers(root: DrillerRoot): Set<DrillerRoot | DrillerNode> {
   const consumers = new Set<DrillerRoot | DrillerNode>();
 
   function walk(node: DrillerRoot | DrillerNode) {
