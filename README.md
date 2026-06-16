@@ -162,10 +162,31 @@ And your agent can fix it
 
 thanks for checking it out <3
 
-## What doesn't work yet and is on roadmap (0.1.0)
-- Custom hooks (shipping rn)
-- Spread props
-- Barrel re-exports (`export { Foo } from "./foo"`)
-- Default exports, esp. wrapped (`export default memo(Foo)`, `forwardRef`)
-- Namespaced JSX (`<motion.div>`)
+## What works today
+
+- `useState` roots with array destructure: `const [v, setV] = useState(...)`
+- Function components: `function Foo()`, `const Foo = () => ...`, `const Foo = function() {}` (PascalCase)
+- Cross-file traversal — follows alias symbols across imports via the TS checker
+- Read-vs-forward distinction per state value (separately for getter and setter)
+- Child prop destructure incl. renames (`{ value: v }`) and rest (`{ x, ...rest }`)
+- `children={<Inner v={v}/>}` pass-through
+- Multi-sibling least-common-ancestor suggestion
+- Multiple `useState`s per component, multiple roots per file
+- Directory walking for `.tsx`/`.jsx` (ignores `node_modules`, `dist`, `.next`, …)
+
+## What isn't yet supported
+
+- Non-array destructure: `const s = useState(0); s[0]`
+- Custom hooks wrapping `useState` (`const [v, setV] = useCounter()`)
+- Other state primitives: `useReducer`, `useRef`, `useContext`, `useSyncExternalStore`
+- Spread props: `<Child {...props} />`
+- `memo(...)` / `forwardRef(...)` wrapped children
+- Default exports, esp. wrapped (`export default memo(Foo)`)
+- Barrel re-exports: `export { Foo } from "./foo"`
+- Namespaced JSX: `<motion.div>`, `<Foo.Bar>`
+- HOC factory results: `const Made = makeFoo()`
+- Dynamic tag: `const Cmp = cond ? A : B; <Cmp />`
+- Class component children (`extends React.Component`)
+- Render-prop / children-as-function: `<Wrap>{(x) => <Inner v={v}/>}</Wrap>`
+- lowercase-named custom components (gated out by PascalCase rule)
 - `node_modules` components (will try to drill in)

@@ -49,7 +49,7 @@ function readVersion(): string {
 
 function printHelp() {
   console.log();
-  console.log(`  ${bold("react-driller")}  ${dim("· spot prop drilling")}`);
+  console.log(`  ${bold("react-driller")}  ${dim("· find useState that lives too high")}`);
   console.log();
   console.log(`  ${bold("usage")}  react-driller <path>...`);
   console.log(`         ${dim("each path may be a file or a directory")}`);

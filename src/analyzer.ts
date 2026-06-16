@@ -1,3 +1,4 @@
+import { debuglog } from "node:util";
 import ts from "typescript";
 import {
   createDrillerNode,
@@ -6,6 +7,19 @@ import {
   type DrillerNode,
   type DrillerRoot,
 } from "./node";
+
+// Opt-in diagnostics: no-op unless NODE_DEBUG=driller is set.
+// Each call marks a shape the analyzer can't handle and skips it instead of
+// crashing — run with the env var to see where coverage leaks. See CONTRIBUTING.md.
+const debug = debuglog("driller");
+
+function nodeLoc(node: ts.Node): string {
+  const sf = node.getSourceFile();
+  const { line, character } = sf.getLineAndCharacterOfPosition(
+    node.getStart(sf),
+  );
+  return `${sf.fileName}:${line + 1}:${character + 1}`;
+}
 
 /// analyzer produces a driller tree
 export function useStateExtractor(
@@ -49,6 +63,15 @@ export function useStateExtractor(
           const ownerSymbol = componentOwner
             ? getFunctionOwnerSymbol(componentOwner, checker)
             : undefined;
+          if (!componentOwner) {
+            // e.g. useState inside a custom hook (camelCase, not a component)
+            debug(
+              "skip: useState with no enclosing component — %s",
+              nodeLoc(node),
+            );
+            ts.forEachChild(node, (child) => visit(child));
+            return;
+          }
 
           if (componentOwner && ownerSymbol && valueSymbol) {
             const sourceFile = node.getSourceFile();
@@ -218,7 +241,13 @@ export function scanNode(
               }
 
               const opening = jsxAttribute.parent.parent;
-              if (!opening) throw new Error("no op - check opening logic");
+              if (!opening) {
+                debug(
+                  "skip: JSX attribute with no opening element — %s",
+                  nodeLoc(node),
+                );
+                return;
+              }
               const propName = jsxAttribute
                 ? ts.isIdentifier(jsxAttribute.name)
                   ? jsxAttribute.name.text
@@ -236,17 +265,24 @@ export function scanNode(
                 const newSymbol =
                   childFn && matchPropBinding(childFn, propName ?? "", checker);
 
-                if (!newSymbol)
-                  throw new Error(
-                    "no op - symbol didn't match on the flip from parent to child. Fix logic",
+                if (!newSymbol) {
+                  debug(
+                    "skip: prop %s didn't resolve to a child binding — %s",
+                    propName ?? "?",
+                    nodeLoc(node),
                   );
+                  return;
+                }
 
                 const name = childFn.name?.text ?? newSymbol?.getName();
 
-                if (!name)
-                  throw new Error(
-                    "No op - the logic for name is wrong - a node should always have a name (the component function name)",
+                if (!name) {
+                  debug(
+                    "skip: child component has no resolvable name — %s",
+                    nodeLoc(node),
                   );
+                  return;
+                }
 
                 // we treat getter and setter separately, so this logic will run twice for
                 // something like <MainPanel count={count} setCount={setCount} />
