@@ -35,22 +35,14 @@ export function generateSetup({ filePaths }: { filePaths: string[] }): {
 }
 
 function resolveCompilerOptions(absPath: string): ts.CompilerOptions {
-  const configPath = ts.findConfigFile(
-    path.dirname(absPath),
-    ts.sys.fileExists,
-    "tsconfig.json",
-  );
+  const configPath = ts.findConfigFile(path.dirname(absPath), ts.sys.fileExists, "tsconfig.json");
 
   if (!configPath) return defaultOptions();
 
   const { config, error } = ts.readConfigFile(configPath, ts.sys.readFile);
   if (error || !config) return defaultOptions();
 
-  const parsed = ts.parseJsonConfigFileContent(
-    config,
-    ts.sys,
-    path.dirname(configPath),
-  );
+  const parsed = ts.parseJsonConfigFileContent(config, ts.sys, path.dirname(configPath));
 
   return {
     ...parsed.options,

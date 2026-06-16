@@ -1,12 +1,6 @@
 import ts from "typescript";
 
-export function createFixture({
-  fileName,
-  source,
-}: {
-  fileName: string;
-  source: string;
-}): {
+export function createFixture({ fileName, source }: { fileName: string; source: string }): {
   program: ts.Program;
   checker: ts.TypeChecker;
   sourceFile: ts.SourceFile;

@@ -1,10 +1,6 @@
 import path from "node:path";
 import type ts from "typescript";
-import {
-  retrieveLeastCommonAncestorFromRoot,
-  scanNode,
-  useStateExtractor,
-} from "./analyzer";
+import { retrieveLeastCommonAncestorFromRoot, scanNode, useStateExtractor } from "./analyzer";
 import type { DrillerNode, DrillerRoot } from "./node";
 import { generateSetup } from "./setup";
 
@@ -46,11 +42,7 @@ export type AnalysisResult = {
   summary: AnalysisSummary;
 };
 
-function toRepoRelative(source: {
-  file: string;
-  line: number;
-  column: number;
-}): Location {
+function toRepoRelative(source: { file: string; line: number; column: number }): Location {
   return {
     file: path.relative(process.cwd(), source.file),
     line: source.line,

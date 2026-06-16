@@ -9,15 +9,8 @@ function findComponent(result: AnalysisResult, file: string, name: string) {
   return component!;
 }
 
-function findState(
-  result: AnalysisResult,
-  file: string,
-  component: string,
-  state: string,
-) {
-  const found = findComponent(result, file, component).states.find(
-    (s) => s.name === state,
-  );
+function findState(result: AnalysisResult, file: string, component: string, state: string) {
+  const found = findComponent(result, file, component).states.find((s) => s.name === state);
   expect(found).toBeDefined();
   return found!;
 }
@@ -57,9 +50,7 @@ describe("analyzeFiles", () => {
         for (const state of component.states) {
           expect(state.location.file.startsWith("/")).toBe(false);
           if (state.suggestedAncestor) {
-            expect(
-              state.suggestedAncestor.location.file.startsWith("/"),
-            ).toBe(false);
+            expect(state.suggestedAncestor.location.file.startsWith("/")).toBe(false);
           }
         }
       }

@@ -29,6 +29,7 @@ describe("tree", () => {
       type: "root",
       usage: Usage.ForwardsGetter,
       ownerComponentFunction,
+      jsxElement: null,
     };
 
     const panel: DrillerNode = {
@@ -45,6 +46,7 @@ describe("tree", () => {
       type: "node",
       usage: Usage.ForwardsGetter,
       ownerComponentFunction,
+      jsxElement: null,
     };
 
     root.children.push(panel);
@@ -63,6 +65,7 @@ describe("tree", () => {
       type: "node",
       usage: Usage.Gets | Usage.Sets,
       ownerComponentFunction,
+      jsxElement: null,
     };
 
     panel.children.push(counter);

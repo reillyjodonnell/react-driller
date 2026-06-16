@@ -12,7 +12,15 @@ const CLI_ENTRY = path.resolve(process.cwd(), "src/cli.ts");
 // committed source (PII guard) while still asserting output carries no such prefix.
 const ABSOLUTE_HOME_PREFIX = ["", "Users", ""].join("/");
 
-const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+// Built via fromCharCode so no literal ESC control char sits in a regex literal
+// (oxlint no-control-regex); 27 === 0x1b.
+const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+const stripAnsi = (s: string) => s.replace(ANSI_PATTERN, "");
+
+// Git's canonical empty-tree object. Diffing against it reports every tracked
+// file as added, so the --diff tests below stay deterministic regardless of
+// what the working branch happens to differ from `main` by.
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 type CliRun = { code: number; stdout: string; stderr: string };
 
@@ -79,12 +87,7 @@ describe("cli --json output", () => {
   });
 
   it("composes with --fail-on: sets exit 1 while stdout stays pure JSON", async () => {
-    const { code, stdout } = await runCli([
-      "--json",
-      "--fail-on",
-      "findings",
-      DRILLING_FIXTURE,
-    ]);
+    const { code, stdout } = await runCli(["--json", "--fail-on", "findings", DRILLING_FIXTURE]);
     expect(code).toBe(1);
     expect(() => JSON.parse(stdout.trim())).not.toThrow();
   });
@@ -141,9 +144,15 @@ describe("cli --diff", () => {
 
   it("intersects the changed set with a file root (regression for <= vs <)", async () => {
     // The maintainer's repro: a root that is a full file path must be kept.
-    // COLOCATED_FIXTURE is a new file versus the default base, so it appears
-    // in the changed set and survives intersection with its own path.
-    const { code, stdout } = await runCli(["--json", "--diff", COLOCATED_FIXTURE]);
+    // Against the empty tree COLOCATED_FIXTURE is in the changed set, so it
+    // survives intersection with its own path.
+    const { code, stdout } = await runCli([
+      "--json",
+      "--diff",
+      "--diff-base",
+      EMPTY_TREE,
+      COLOCATED_FIXTURE,
+    ]);
     expect(code).toBe(0);
     const parsed = JSON.parse(stdout.trim());
     expect(parsed.summary.filesScanned).toBeGreaterThanOrEqual(1);
@@ -154,7 +163,7 @@ describe("cli --diff", () => {
     // --diff from a subdirectory must still find changed files. The old code
     // resolved against cwd and reported nothing.
     const subdir = path.join(process.cwd(), "e2e");
-    const { code, stdout } = await runCli(["--json", "--diff"], subdir);
+    const { code, stdout } = await runCli(["--json", "--diff", "--diff-base", EMPTY_TREE], subdir);
     expect(code).toBe(0);
     const parsed = JSON.parse(stdout.trim());
     expect(parsed.summary.filesScanned).toBeGreaterThanOrEqual(1);

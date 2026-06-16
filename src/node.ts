@@ -32,10 +32,7 @@ export const Usage = {
 export type DrillerNode = {
   type: "node";
   name: string;
-  ownerComponentFunction:
-    | ts.FunctionDeclaration
-    | ts.ArrowFunction
-    | ts.FunctionExpression;
+  ownerComponentFunction: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression;
   parent: DrillerRoot | DrillerNode | null;
   children: Array<DrillerNode>;
   source: {

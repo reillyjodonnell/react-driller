@@ -44,10 +44,7 @@ export function validateFailOnLevel(raw: string): FailOnValidation {
  * - `none`: always 0, even when drilling findings exist (today's behavior).
  * - `findings`: 1 when there is at least one drilling finding, else 0.
  */
-export function exitCodeFor(
-  result: DrillingSummary,
-  failOn: FailOnLevel,
-): number {
+export function exitCodeFor(result: DrillingSummary, failOn: FailOnLevel): number {
   switch (failOn) {
     case "none":
       return 0;

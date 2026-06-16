@@ -15,7 +15,10 @@ function captureStartEngine(filePaths: string[]): string[] {
   return lines;
 }
 
-const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+// Built via fromCharCode so no literal ESC control char sits in a regex literal
+// (oxlint no-control-regex); 27 === 0x1b.
+const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+const stripAnsi = (s: string) => s.replace(ANSI_PATTERN, "");
 
 // Built from parts so this guard test never embeds the literal home-dir prefix.
 const homeDirPrefix = `/${"Users"}/`;
@@ -38,18 +41,14 @@ describe("startEngine text rendering", () => {
 
   it("logs a co-located check line for count", () => {
     const plain = lines.map(stripAnsi);
-    expect(
-      plain.some((line) => line.includes("`count`") && line.includes("✓ in")),
-    ).toBe(true);
+    expect(plain.some((line) => line.includes("`count`") && line.includes("✓ in"))).toBe(true);
   });
 
   it("logs a drilling line for theme pointing at ThemeToggle", () => {
     const plain = lines.map(stripAnsi);
-    expect(
-      plain.some(
-        (line) => line.includes("`theme`") && line.includes("ThemeToggle"),
-      ),
-    ).toBe(true);
+    expect(plain.some((line) => line.includes("`theme`") && line.includes("ThemeToggle"))).toBe(
+      true,
+    );
   });
 
   it("emits no absolute paths in any logged line", () => {

@@ -39,10 +39,7 @@ describe("filterChangedFiles", () => {
   });
 
   it("keeps a file whose root is the file's full path (<= vs < regression)", () => {
-    const result = filterChangedFiles(
-      ["e2e/4-colocated/app.tsx"],
-      ["e2e/4-colocated/app.tsx"],
-    );
+    const result = filterChangedFiles(["e2e/4-colocated/app.tsx"], ["e2e/4-colocated/app.tsx"]);
     expect(result).toEqual(["e2e/4-colocated/app.tsx"]);
   });
 
@@ -52,18 +49,12 @@ describe("filterChangedFiles", () => {
   });
 
   it("matches a file-path root only for that exact file, not siblings", () => {
-    const result = filterChangedFiles(
-      ["src/App.tsx", "src/Other.tsx"],
-      ["src/App.tsx"],
-    );
+    const result = filterChangedFiles(["src/App.tsx", "src/Other.tsx"], ["src/App.tsx"]);
     expect(result).toEqual(["src/App.tsx"]);
   });
 
   it("with empty roots keeps any non-ignored .tsx/.jsx regardless of directory", () => {
-    const result = filterChangedFiles(
-      ["anywhere/deep/Comp.tsx", "top.jsx"],
-      [],
-    );
+    const result = filterChangedFiles(["anywhere/deep/Comp.tsx", "top.jsx"], []);
     expect(result).toEqual(["anywhere/deep/Comp.tsx", "top.jsx"]);
   });
 
@@ -81,10 +72,6 @@ describe("filterChangedFiles", () => {
     const first = filterChangedFiles(changed, roots);
     const second = filterChangedFiles(changed, roots);
     expect(first).toEqual(second);
-    expect(changed).toEqual([
-      "src/App.tsx",
-      "src/Foo.ts",
-      "node_modules/x/Comp.tsx",
-    ]);
+    expect(changed).toEqual(["src/App.tsx", "src/Foo.ts", "node_modules/x/Comp.tsx"]);
   });
 });
