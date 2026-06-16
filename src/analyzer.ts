@@ -13,13 +13,10 @@ export function useStateExtractor(
   checker: ts.TypeChecker,
 ): DrillerRoot[] {
   const roots: DrillerRoot[] = [];
+  const useStateNames = collectUseStateBindingNames(sourceFile);
 
   function visit(node: ts.Node) {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "useState"
-    ) {
+    if (ts.isCallExpression(node) && isUseStateCall(node, useStateNames)) {
       if (
         ts.isVariableDeclaration(node.parent) &&
         ts.isArrayBindingPattern(node.parent.name)
@@ -87,6 +84,63 @@ export function useStateExtractor(
   visit(sourceFile);
 
   return roots;
+}
+
+function isUseStateCall(
+  node: ts.CallExpression,
+  useStateNames: Set<string>,
+): boolean {
+  // R.useState(...) / React.useState(...): match on the property name.
+  // Namespace and default imports both land here.
+  if (
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === "useState"
+  ) {
+    return true;
+  }
+  if (!ts.isIdentifier(node.expression)) return false;
+  return useStateNames.has(node.expression.text);
+}
+
+// One pass over the source file: collect every identifier that refers to
+// React's `useState` in this file. Cheaper than a per-call symbol lookup —
+// the call-site check is then a Set hit.
+function collectUseStateBindingNames(sourceFile: ts.SourceFile): Set<string> {
+  const names = new Set<string>(["useState"]);
+  let shadowed = false;
+
+  function visit(node: ts.Node) {
+    // import { useState [as X] } from "react"  →  bind the local name
+    if (ts.isImportDeclaration(node) && node.importClause) {
+      const named = node.importClause.namedBindings;
+      if (named && ts.isNamedImports(named)) {
+        for (const spec of named.elements) {
+          const original = (spec.propertyName ?? spec.name).text;
+          if (original === "useState") names.add(spec.name.text);
+        }
+      }
+    }
+    // function useState(...) {}  →  shadows the hook in this file
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "useState") {
+      shadowed = true;
+    }
+    // const u = useState  →  pick up the re-binding
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      ts.isIdentifier(node.initializer) &&
+      names.has(node.initializer.text)
+    ) {
+      if (node.name.text === "useState") shadowed = true;
+      else names.add(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+
+  if (shadowed) names.delete("useState");
+  return names;
 }
 
 type ComponentFn =

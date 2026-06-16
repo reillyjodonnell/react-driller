@@ -614,6 +614,191 @@ describe("JSX / React edge cases", () => {
     expect(root.children.length).toBe(1);
     expect(root.children[0]?.name).toBe("Child");
   });
+
+  it("handles namespaced useStates", () => {
+    const root = drive(`
+      function App() {
+        const [count, setCount] = React.useState(0);
+        const show = true;
+        return <div>{show && <Child count={count} />}</div>;
+      }
+      function Child({ count }) {
+        return <span>{count}</span>;
+      }
+    `);
+
+    expect(root.usage).toBe(Usage.ForwardsGetter);
+    expect(root.children.length).toBe(1);
+    expect(root.children[0]?.name).toBe("Child");
+  });
+});
+
+/**
+ * Import shapes for `useState`. These pin the desired behavior of the
+ * analyzer's call-site detection — anything that ultimately resolves to
+ * React's `useState` should produce a root, regardless of how the binding
+ * was brought into scope.
+ *
+ * Several of these will fail until the call-site check in `useStateExtractor`
+ * stops comparing identifier text and starts walking the alias chain via
+ * `checker.getAliasedSymbol`.
+ */
+describe("useState import shapes", () => {
+  function drive(source: string) {
+    const { sourceFile, checker } = createFixture({
+      fileName: "app.tsx",
+      source,
+    });
+    const [root] = useStateExtractor(sourceFile, checker);
+    if (!root) throw new Error("expected a root for this fixture");
+    const queue: Array<DrillerRoot | DrillerNode> = [root];
+    while (queue.length) {
+      const node = queue.shift();
+      if (node) scanNode(node, checker, queue);
+    }
+    return root;
+  }
+
+  // Baseline: plain named import. Text-equality detection already handles
+  // this one, so it should pass today.
+  it("handles a plain named import (`import { useState } from 'react'`)", () => {
+    const root = drive(`
+      import { useState } from "react";
+      function App() {
+        const [count, setCount] = useState(0);
+        return <Child count={count} />;
+      }
+      function Child({ count }) {
+        return <span>{count}</span>;
+      }
+    `);
+
+    expect(root.usage).toBe(Usage.ForwardsGetter);
+    expect(root.children.length).toBe(1);
+    expect(root.children[0]?.name).toBe("Child");
+  });
+
+  // Renamed named import: the call site reads `us(0)`, so the text check
+  // misses it. Resolving the symbol and walking the alias should land back
+  // on `useState`.
+  it("handles a renamed named import (`import { useState as us } from 'react'`)", () => {
+    const root = drive(`
+      import { useState as us } from "react";
+      function App() {
+        const [count, setCount] = us(0);
+        return <Child count={count} />;
+      }
+      function Child({ count }) {
+        return <span>{count}</span>;
+      }
+    `);
+
+    expect(root.usage).toBe(Usage.ForwardsGetter);
+    expect(root.children.length).toBe(1);
+    expect(root.children[0]?.name).toBe("Child");
+  });
+
+  // Namespace import + property access. The property-access branch already
+  // matches on `.name.text === "useState"`, so this should pass today even
+  // though the namespace alias `R` differs from the conventional `React`.
+  it("handles a namespace import (`import * as R from 'react'; R.useState(...)`)", () => {
+    const root = drive(`
+      import * as R from "react";
+      function App() {
+        const [count, setCount] = R.useState(0);
+        return <Child count={count} />;
+      }
+      function Child({ count }) {
+        return <span>{count}</span>;
+      }
+    `);
+
+    expect(root.usage).toBe(Usage.ForwardsGetter);
+    expect(root.children.length).toBe(1);
+    expect(root.children[0]?.name).toBe("Child");
+  });
+
+  // Default import + property access (`import React from "react"`). Same
+  // shape as the namespace case at the call site.
+  it("handles a default import (`import React from 'react'; React.useState(...)`)", () => {
+    const root = drive(`
+      import React from "react";
+      function App() {
+        const [count, setCount] = React.useState(0);
+        return <Child count={count} />;
+      }
+      function Child({ count }) {
+        return <span>{count}</span>;
+      }
+    `);
+
+    expect(root.usage).toBe(Usage.ForwardsGetter);
+    expect(root.children.length).toBe(1);
+    expect(root.children[0]?.name).toBe("Child");
+  });
+
+  // Combined default + renamed named import. Same alias-walk requirement as
+  // the renamed-named-import case.
+  it("handles default + renamed named (`import React, { useState as us } from 'react'`)", () => {
+    const root = drive(`
+      import React, { useState as us } from "react";
+      function App() {
+        const [count, setCount] = us(0);
+        return <Child count={count} />;
+      }
+      function Child({ count }) {
+        return <span>{count}</span>;
+      }
+    `);
+
+    expect(root.usage).toBe(Usage.ForwardsGetter);
+    expect(root.children.length).toBe(1);
+    expect(root.children[0]?.name).toBe("Child");
+  });
+
+  // Local re-binding of the imported hook (`const u = useState; u(0)`). The
+  // call-site identifier is `u`, whose symbol points at the local const, not
+  // directly at the import. Resolving has to follow the initializer back to
+  // the import alias.
+  it("handles a local re-binding of the import (`const u = useState; u(0)`)", () => {
+    const root = drive(`
+      import { useState } from "react";
+      const u = useState;
+      function App() {
+        const [count, setCount] = u(0);
+        return <Child count={count} />;
+      }
+      function Child({ count }) {
+        return <span>{count}</span>;
+      }
+    `);
+
+    expect(root.usage).toBe(Usage.ForwardsGetter);
+    expect(root.children.length).toBe(1);
+    expect(root.children[0]?.name).toBe("Child");
+  });
+
+  // Negative case: a non-React function literally named `useState` should
+  // NOT be picked up once the analyzer is symbol-aware. Today the text
+  // check produces a false positive here; after the alias-walk change it
+  // should resolve to the local declaration and be ignored.
+  it("ignores a locally-defined function that happens to be named useState", () => {
+    const { sourceFile, checker } = createFixture({
+      fileName: "app.tsx",
+      source: `
+        function useState(_: number): [number, (n: number) => void] {
+          return [0, () => {}];
+        }
+        function App() {
+          const [count, setCount] = useState(0);
+          return <span>{count}</span>;
+        }
+      `,
+    });
+
+    const roots = useStateExtractor(sourceFile, checker);
+    expect(roots).toHaveLength(0);
+  });
 });
 
 /**
