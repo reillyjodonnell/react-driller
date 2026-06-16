@@ -154,23 +154,39 @@ function isComponentFn(n: ts.Node): n is ComponentFn {
   return name !== undefined && isPascalCase(name);
 }
 
-function getFunctionName(fn: ComponentFn): string | undefined {
-  // outer binding (what JSX consumers reference) wins:
-  // const App = () => {...}  OR  const App = function() {...}  OR  const Outer = function Inner() {...}
-  if (
-    (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
-    ts.isVariableDeclaration(fn.parent) &&
-    ts.isIdentifier(fn.parent.name)
-  ) {
-    return fn.parent.name.text;
+// The identifier that names this component: the variable it's bound to
+// (through any memo()/forwardRef() wrapper), or the function's own name for a
+// declaration / named function expression. The display name (.text) and the
+// owner symbol are both read off this one identifier, so the two can't drift.
+function maybeComponentNameIdentifier(fn: ComponentFn): ts.Identifier | undefined {
+  // read through any memo()/forwardRef() wrapper to the bound variable
+  if (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) {
+    const binding = maybeBindingThroughHOCWrapper(fn);
+    if (binding) return binding;
   }
   // function App() {...}  → fn.name is the Identifier "App"
-  if (ts.isFunctionDeclaration(fn) && fn.name) {
-    return fn.name.text;
-  }
+  if (ts.isFunctionDeclaration(fn) && fn.name) return fn.name;
   // named function expression with no outer binding (rare)
-  if (ts.isFunctionExpression(fn) && fn.name) {
-    return fn.name.text;
+  if (ts.isFunctionExpression(fn) && fn.name) return fn.name;
+  return undefined;
+}
+
+function getFunctionName(fn: ComponentFn): string | undefined {
+  return maybeComponentNameIdentifier(fn)?.text;
+}
+
+// A "binding" is a named thing e.g. the `App` in `const App = () => {};`.
+// Climb from an arrow/function-expression past any HOC call wrappers
+// (memo, forwardRef, observer, …) to the variable declaration that binds it
+// (const/let/var), and return that binding's identifier, so a component
+// written as `const App = memo(() => {...})` resolves to "App".
+function maybeBindingThroughHOCWrapper(fn: ts.Node): ts.Identifier | undefined {
+  let current: ts.Node = fn.parent;
+  while (current && ts.isCallExpression(current)) {
+    current = current.parent;
+  }
+  if (current && ts.isVariableDeclaration(current) && ts.isIdentifier(current.name)) {
+    return current.name;
   }
   return undefined;
 }
@@ -236,7 +252,14 @@ export function scanNode(
                   return;
                 }
 
-                const name = childFn.name?.text ?? newSymbol?.getName();
+                // Name the child by the JSX tag the consumer wrote. childFn.name
+                // only exists for declarations / named function expressions; for
+                // `const C = () => {}` or `const C = memo(() => {})` it is
+                // undefined, so falling back to the tag (rather than the matched
+                // prop's symbol) keeps the component's real name.
+                const tag = opening.tagName;
+                const name =
+                  childFn.name?.text ?? (ts.isIdentifier(tag) ? tag.text : tag.getText());
 
                 if (!name) {
                   debug("skip: child component has no resolvable name — %s", nodeLoc(node));
@@ -325,10 +348,24 @@ function resolveComponentFn(
   if (ts.isFunctionDeclaration(decl) || ts.isArrowFunction(decl) || ts.isFunctionExpression(decl)) {
     return decl;
   }
-  // const Child = () => {...}  or  const Child = function () {...}
+  // const Child = () => {...} / function () {...} / memo(() => {...}) /
+  // forwardRef((p, ref) => {...}) / memo(forwardRef(...))
   if (ts.isVariableDeclaration(decl) && decl.initializer) {
-    const init = decl.initializer;
-    if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return init;
+    return unwrapComponentFn(decl.initializer);
+  }
+  return undefined;
+}
+
+// Peel HOC call wrappers off an initializer to find the underlying component
+// function. `memo(() => {...})` and `forwardRef((p, ref) => {...})` both pass
+// the render function as an argument, so recurse into call arguments.
+function unwrapComponentFn(expr: ts.Expression): ComponentFn | undefined {
+  if (ts.isArrowFunction(expr) || ts.isFunctionExpression(expr)) return expr;
+  if (ts.isCallExpression(expr)) {
+    for (const arg of expr.arguments) {
+      const found = unwrapComponentFn(arg);
+      if (found) return found;
+    }
   }
   return undefined;
 }
@@ -365,27 +402,11 @@ function isPascalCase(name: string): boolean {
   return /^[A-Z]/.test(name);
 }
 
-function getFunctionOwnerSymbol(
-  fn: ts.SignatureDeclaration,
-  checker: ts.TypeChecker,
-): ts.Symbol | undefined {
-  // outer binding (what JSX consumers see) wins, so the symbol matches
-  // whatever <App /> resolves to downstream
-  if (
-    (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
-    ts.isVariableDeclaration(fn.parent) &&
-    ts.isIdentifier(fn.parent.name)
-  ) {
-    return checker.getSymbolAtLocation(fn.parent.name);
-  }
-  if (ts.isFunctionDeclaration(fn) && fn.name) {
-    return checker.getSymbolAtLocation(fn.name);
-  }
-  // named function expression with no outer binding (rare)
-  if (ts.isFunctionExpression(fn) && fn.name) {
-    return checker.getSymbolAtLocation(fn.name);
-  }
-  return undefined;
+// The symbol `<App />` consumers resolve to — read off the same identifier
+// that names the component, so name and owner symbol always agree.
+function getFunctionOwnerSymbol(fn: ComponentFn, checker: ts.TypeChecker): ts.Symbol | undefined {
+  const id = maybeComponentNameIdentifier(fn);
+  return id ? checker.getSymbolAtLocation(id) : undefined;
 }
 
 function nodeAttachedToJsxElement(node: ts.Node) {
