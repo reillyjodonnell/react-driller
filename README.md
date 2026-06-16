@@ -23,7 +23,7 @@ Each path may be a file or a directory. Directories are walked recursively for `
 
 #### `--json`
 
-Prints a single JSON object describing every scanned file, its components, and each piece of `useState` it owns. Each state reports whether it is `drilled` and, when it is, the `suggestedAncestor` where it should live. A top-level `summary` carries the aggregate counts.
+Prints a single JSON object describing every scanned file, its components, and each piece of `useState` it owns. Each state reports whether it is `drilled` and, when it is, the `suggestedParent` where it should live. A top-level `summary` carries the aggregate counts.
 
 ```
 $ react-driller --json src/App.tsx
@@ -43,7 +43,7 @@ $ react-driller --json src/App.tsx
               "name": "theme",
               "location": { "file": "src/App.tsx", "line": 2, "column": 30 },
               "drilled": true,
-              "suggestedAncestor": {
+              "suggestedParent": {
                 "name": "ThemeToggle",
                 "location": { "file": "src/App.tsx", "line": 11, "column": 1 }
               }
@@ -66,7 +66,7 @@ Controls the process exit code so react-driller can gate a commit or CI run.
 | Level | Behavior |
 | --- | --- |
 | `none` (default) | Always exit `0`. Preserves the default behavior. |
-| `findings` | Exit `1` when there is at least one drilling finding (a `useState` whose least-common-ancestor differs from the component that declares it); otherwise exit `0`. |
+| `findings` | Exit `1` when there is at least one drilling finding (a `useState` whose closest common parent differs from the component that declares it); otherwise exit `0`. |
 
 An unrecognized level prints a clear error to stderr and exits `1`.
 
@@ -164,27 +164,27 @@ thanks for checking it out <3
 
 ## What works today
 
-- `useState` roots with array destructure: `const [v, setV] = useState(...)`
+- State-hook roots with array destructure: `const [v, setV] = useState(...)` and `const [state, dispatch] = useReducer(...)` — the useState setter function and the useReducer dispatch function are both tracked as the state's updater
 - Function components: `function Foo()`, `const Foo = () => ...`, `const Foo = function() {}` (PascalCase)
+- HOC-wrapped components: `const Foo = memo(() => ...)`, `forwardRef(...)`, and arbitrary/curried HOCs (`withX(() => ...)`, `connect(opts)(() => ...)`) — both as state owners and as drilled-into children
 - Cross-file traversal — follows alias symbols across imports via the TS checker
 - Read-vs-forward distinction per state value (separately for getter and setter)
 - Child prop destructure incl. renames (`{ value: v }`) and rest (`{ x, ...rest }`)
 - `children={<Inner v={v}/>}` pass-through
-- Multi-sibling least-common-ancestor suggestion
+- Closest-common-parent suggestion (where to *lift state up*) across multiple siblings
 - Multiple `useState`s per component, multiple roots per file
 - Directory walking for `.tsx`/`.jsx` (ignores `node_modules`, `dist`, `.next`, …)
 
 ## What isn't yet supported
 
 - Non-array destructure: `const s = useState(0); s[0]`
-- Custom hooks wrapping `useState` (`const [v, setV] = useCounter()`)
-- Other state primitives: `useReducer`, `useRef`, `useContext`, `useSyncExternalStore`
+- Custom hooks wrapping `useState`/`useReducer` (`const [v, setV] = useCounter()`)
+- Other state primitives: `useRef`, `useContext`, `useSyncExternalStore`
 - Spread props: `<Child {...props} />`
-- `memo(...)` / `forwardRef(...)` wrapped children
-- Default exports, esp. wrapped (`export default memo(Foo)`)
+- Anonymous default exports (no binding to name): `export default () => {}`, `export default memo(() => ...)`
 - Barrel re-exports: `export { Foo } from "./foo"`
 - Namespaced JSX: `<motion.div>`, `<Foo.Bar>`
-- HOC factory results: `const Made = makeFoo()`
+- HOC calls with no inline render function: `const Made = makeFoo()` (the component lives inside `makeFoo`, so there's nothing local to attribute state to — unlike `memo(() => ...)` where the function is right there)
 - Dynamic tag: `const Cmp = cond ? A : B; <Cmp />`
 - Class component children (`extends React.Component`)
 - Render-prop / children-as-function: `<Wrap>{(x) => <Inner v={v}/>}</Wrap>`

@@ -23,17 +23,17 @@ describe("analyzeFiles", () => {
     expect(app.name).toBe("App");
   });
 
-  it("marks a drilled state with its suggested ancestor", () => {
+  it("marks a drilled state with its suggested parent", () => {
     const theme = findState(result, "1-simple/app.tsx", "App", "theme");
     expect(theme.drilled).toBe(true);
-    expect(theme.suggestedAncestor).toBeDefined();
-    expect(theme.suggestedAncestor?.name).toBe("ThemeToggle");
+    expect(theme.suggestedParent).toBeDefined();
+    expect(theme.suggestedParent?.name).toBe("ThemeToggle");
   });
 
-  it("marks a co-located state as not drilled and omits the suggested ancestor", () => {
+  it("marks a co-located state as not drilled and omits the suggested parent", () => {
     const count = findState(result, "1-simple/app.tsx", "App", "count");
     expect(count.drilled).toBe(false);
-    expect(count.suggestedAncestor).toBeUndefined();
+    expect(count.suggestedParent).toBeUndefined();
   });
 
   it("counts at least one drilling finding in the summary", () => {
@@ -49,8 +49,8 @@ describe("analyzeFiles", () => {
         expect(component.location.file.startsWith("/")).toBe(false);
         for (const state of component.states) {
           expect(state.location.file.startsWith("/")).toBe(false);
-          if (state.suggestedAncestor) {
-            expect(state.suggestedAncestor.location.file.startsWith("/")).toBe(false);
+          if (state.suggestedParent) {
+            expect(state.suggestedParent.location.file.startsWith("/")).toBe(false);
           }
         }
       }

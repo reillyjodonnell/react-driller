@@ -4,7 +4,8 @@ import type { DrillerNode, DrillerRoot } from "../node";
 
 // Shared analyzer fixtures. `extractRoots` runs only the extraction pass
 // (which useState calls become roots); `analyzeRoots` additionally walks each
-// root through scanNode so usage flags, children, and LCA are populated;
+// root through scanNode so usage flags and children are populated (the
+// closest-common-parent query then reads off that tree);
 // `analyzeRoot` returns the single expected root and throws if none was found.
 export function extractRoots(source: string): DrillerRoot[] {
   const { sourceFile, checker } = createFixture({ fileName: "app.tsx", source });

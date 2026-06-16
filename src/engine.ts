@@ -16,11 +16,11 @@ function formatLocation(location: Location) {
 }
 
 function verdict(component: ComponentAnalysis, state: StateAnalysis): string {
-  if (!state.suggestedAncestor) {
+  if (!state.suggestedParent) {
     return `${green("✓")} in ${bold(component.name)}`;
   }
-  const ancestor = state.suggestedAncestor;
-  return `${bold(component.name)} ${yellow("→")} ${bold(ancestor.name)}  ${dim(formatLocation(ancestor.location))}`;
+  const parent = state.suggestedParent;
+  return `${bold(component.name)} ${yellow("→")} ${bold(parent.name)}  ${dim(formatLocation(parent.location))}`;
 }
 
 function renderComponent(component: ComponentAnalysis) {

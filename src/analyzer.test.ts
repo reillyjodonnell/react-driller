@@ -1,14 +1,14 @@
 import { describe, it, expect } from "bun:test";
 import { Usage, type DrillerRoot } from "./node";
 import { analyzeRoot, analyzeRoots, extractRoots } from "./test-utils";
-import { retrieveLeastCommonAncestorFromRoot } from "./analyzer";
+import { retrieveClosestCommonParentFromRoot } from "./analyzer";
 
 /**
  * Tests are grouped by the three questions the analyzer answers, each backed by
  * one exported function:
  *   1. useStateExtractor
  *   2. scanNode
- *   3. retrieveLeastCommonAncestorFromRoot
+ *   3. retrieveClosestCommonParentFromRoot
  */
 
 describe("useStateExtractor — where state is declared", () => {
@@ -163,6 +163,54 @@ describe("useStateExtractor — where state is declared", () => {
       `);
 
       expect(roots).toHaveLength(0);
+    });
+  });
+
+  describe("state hooks (useState / useReducer)", () => {
+    // useReducer's [state, dispatch] tuple is modeled like useState's
+    // [value, setter]: `state` is the value, `dispatch` is the setter.
+    it("models useReducer and drills its state", () => {
+      const [root] = analyzeRoots(`
+        import { useReducer } from "react";
+        function App() {
+          const [state, dispatch] = useReducer(reducer, 0);
+          return <Child state={state} />;
+        }
+        function Child({ state }) { return <span>{state}</span>; }
+      `);
+      expect(root?.name).toBe("App");
+      expect(root?.usage).toBe(Usage.ForwardsGetter);
+      expect(root?.children[0]?.name).toBe("Child");
+    });
+
+    // dispatch plays the setter's role, so forwarding it reads as a setter
+    // forward and a child call reads as a Set.
+    it("treats a forwarded dispatch as a setter forward", () => {
+      const [root] = analyzeRoots(`
+        import { useReducer } from "react";
+        function App() {
+          const [state, dispatch] = useReducer(reducer, 0);
+          return <Child dispatch={dispatch} />;
+        }
+        function Child({ dispatch }) {
+          return <button onClick={() => dispatch({ type: "inc" })}>+</button>;
+        }
+      `);
+      expect(root?.usage).toBe(Usage.ForwardsSetter);
+      expect(root?.children[0]?.usage).toBe(Usage.Sets);
+    });
+
+    it("detects a renamed useReducer import", () => {
+      const [root] = analyzeRoots(`
+        import { useReducer as useR } from "react";
+        function App() {
+          const [state, dispatch] = useR(reducer, 0);
+          return <Child state={state} />;
+        }
+        function Child({ state }) { return <span>{state}</span>; }
+      `);
+      expect(root?.name).toBe("App");
+      expect(root?.children[0]?.name).toBe("Child");
     });
   });
 
@@ -408,20 +456,6 @@ describe("useStateExtractor — where state is declared", () => {
         function Child({ count }) { return <span>{count}</span>; }
       `);
       expect(roots).toHaveLength(0); // FLIP to 1 when default exports are named
-    });
-
-    // useReducer is the standard escape hatch for complex state and is just as
-    // prone to being drilled, but isUseStateCall only matches useState.
-    it("does not model useReducer", () => {
-      const roots = extractRoots(`
-        import { useReducer } from "react";
-        function App() {
-          const [state, dispatch] = useReducer(reducer, 0);
-          return <Child state={state} />;
-        }
-        function Child({ state }) { return <span>{state}</span>; }
-      `);
-      expect(roots).toHaveLength(0); // FLIP when useReducer is modeled
     });
   });
 });
@@ -829,7 +863,7 @@ describe("scanNode — how state flows", () => {
   });
 });
 
-describe("retrieveLeastCommonAncestorFromRoot — where state should live", () => {
+describe("retrieveClosestCommonParentFromRoot — where to lift state up", () => {
   it("should be CounterPanel since App only forwards count down a single branch", () => {
     const root = analyzeRoot(`
     function App() {
@@ -870,8 +904,8 @@ describe("retrieveLeastCommonAncestorFromRoot — where state should live", () =
     }
   `);
 
-    const lca = retrieveLeastCommonAncestorFromRoot(root);
-    expect(lca.name).toBe("CounterPanel");
+    const commonParent = retrieveClosestCommonParentFromRoot(root);
+    expect(commonParent.name).toBe("CounterPanel");
   });
 
   it("should be Counter when state is drilled straight down through several components", () => {
@@ -928,11 +962,11 @@ describe("retrieveLeastCommonAncestorFromRoot — where state should live", () =
     }
   `);
 
-    const lca = retrieveLeastCommonAncestorFromRoot(root);
-    expect(lca.name).toBe("Counter");
+    const commonParent = retrieveClosestCommonParentFromRoot(root);
+    expect(commonParent.name).toBe("Counter");
   });
 
-  // The root component is its own consumer, so LCA returns the root.
+  // The root component is its own consumer, so the common parent is the root.
   it("returns the root when state is consumed in the declaring component", () => {
     const root = analyzeRoot(`
       function App() {
@@ -946,8 +980,8 @@ describe("retrieveLeastCommonAncestorFromRoot — where state should live", () =
       }
     `);
 
-    const lca = retrieveLeastCommonAncestorFromRoot(root);
-    expect(lca.name).toBe("App");
+    const commonParent = retrieveClosestCommonParentFromRoot(root);
+    expect(commonParent.name).toBe("App");
   });
 
   // Nothing consumes the state anywhere; the helper falls back to the root.
@@ -959,11 +993,11 @@ describe("retrieveLeastCommonAncestorFromRoot — where state should live", () =
       }
     `);
 
-    const lca = retrieveLeastCommonAncestorFromRoot(root);
-    expect(lca.name).toBe("App");
+    const commonParent = retrieveClosestCommonParentFromRoot(root);
+    expect(commonParent.name).toBe("App");
   });
 
-  // The first node with two children is treated as the LCA, even if neither
+  // The first node with two children is treated as the common parent, even if neither
   // sibling reads state directly at that level.
   it("returns the first forking node when state branches to siblings", () => {
     const root = analyzeRoot(`
@@ -989,8 +1023,8 @@ describe("retrieveLeastCommonAncestorFromRoot — where state should live", () =
       }
     `);
 
-    const lca = retrieveLeastCommonAncestorFromRoot(root);
-    expect(lca.name).toBe("Middle");
+    const commonParent = retrieveClosestCommonParentFromRoot(root);
+    expect(commonParent.name).toBe("Middle");
   });
 
   it("handles the jsx as props pattern", () => {
@@ -1009,11 +1043,11 @@ describe("retrieveLeastCommonAncestorFromRoot — where state should live", () =
       }
     `);
 
-    const lca = retrieveLeastCommonAncestorFromRoot(root);
-    expect(lca.name).toBe("App");
+    const commonParent = retrieveClosestCommonParentFromRoot(root);
+    expect(commonParent.name).toBe("App");
   });
 
-  it("computes LCA correctly for an arrow component that drills through a middle layer", () => {
+  it("computes the closest common parent for an arrow component that drills through a middle layer", () => {
     const [root] = analyzeRoots(`
       const App = () => {
         const [count, setCount] = useState(0);
@@ -1035,7 +1069,7 @@ describe("retrieveLeastCommonAncestorFromRoot — where state should live", () =
       }
     `);
     if (!root) throw new Error("expected a root");
-    const lca = retrieveLeastCommonAncestorFromRoot(root);
-    expect(lca.name).toBe("Middle");
+    const commonParent = retrieveClosestCommonParentFromRoot(root);
+    expect(commonParent.name).toBe("Middle");
   });
 });

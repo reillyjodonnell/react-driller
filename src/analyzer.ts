@@ -19,10 +19,10 @@ export function useStateExtractor(
   checker: ts.TypeChecker,
 ): DrillerRoot[] {
   const roots: DrillerRoot[] = [];
-  const useStateNames = collectUseStateBindingNames(sourceFile);
+  const stateHookNames = collectStateHookNames(sourceFile);
 
   function visit(node: ts.Node) {
-    if (ts.isCallExpression(node) && isUseStateCall(node, useStateNames)) {
+    if (ts.isCallExpression(node) && isStateHookCall(node, stateHookNames)) {
       if (ts.isVariableDeclaration(node.parent) && ts.isArrayBindingPattern(node.parent.name)) {
         const [valueBinding, setterBinding] = node.parent.name.elements;
 
@@ -92,37 +92,46 @@ export function useStateExtractor(
   return roots;
 }
 
-function isUseStateCall(node: ts.CallExpression, useStateNames: Set<string>): boolean {
-  // R.useState(...) / React.useState(...): match on the property name.
+// React state-producing hooks whose `[value, setter]` tuple the analyzer
+// models. useReducer's `[state, dispatch]` has the same array shape — dispatch
+// plays the setter's role — so both flow through the extractor identically.
+const STATE_HOOKS = new Set(["useState", "useReducer"]);
+
+function isStateHookCall(node: ts.CallExpression, hookNames: Set<string>): boolean {
+  // R.useState(...) / React.useReducer(...): match on the property name.
   // Namespace and default imports both land here.
-  if (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "useState") {
+  if (
+    ts.isPropertyAccessExpression(node.expression) &&
+    STATE_HOOKS.has(node.expression.name.text)
+  ) {
     return true;
   }
   if (!ts.isIdentifier(node.expression)) return false;
-  return useStateNames.has(node.expression.text);
+  return hookNames.has(node.expression.text);
 }
 
-// One pass over the source file: collect every identifier that refers to
-// React's `useState` in this file. Cheaper than a per-call symbol lookup —
+// One pass over the source file: collect every identifier that refers to one
+// of React's state hooks (useState / useReducer) in this file, accounting for
+// import renames and local re-bindings. Cheaper than a per-call symbol lookup —
 // the call-site check is then a Set hit.
-function collectUseStateBindingNames(sourceFile: ts.SourceFile): Set<string> {
-  const names = new Set<string>(["useState"]);
-  let shadowed = false;
+function collectStateHookNames(sourceFile: ts.SourceFile): Set<string> {
+  const names = new Set<string>(STATE_HOOKS);
+  const shadowed = new Set<string>();
 
   function visit(node: ts.Node) {
-    // import { useState [as X] } from "react"  →  bind the local name
+    // import { useState [as X], useReducer [as Y] } from "react"  →  local names
     if (ts.isImportDeclaration(node) && node.importClause) {
       const named = node.importClause.namedBindings;
       if (named && ts.isNamedImports(named)) {
         for (const spec of named.elements) {
           const original = (spec.propertyName ?? spec.name).text;
-          if (original === "useState") names.add(spec.name.text);
+          if (STATE_HOOKS.has(original)) names.add(spec.name.text);
         }
       }
     }
-    // function useState(...) {}  →  shadows the hook in this file
-    if (ts.isFunctionDeclaration(node) && node.name?.text === "useState") {
-      shadowed = true;
+    // function useState(...) {}  →  a local declaration shadows the hook
+    if (ts.isFunctionDeclaration(node) && node.name && STATE_HOOKS.has(node.name.text)) {
+      shadowed.add(node.name.text);
     }
     // const u = useState  →  pick up the re-binding
     if (
@@ -132,14 +141,14 @@ function collectUseStateBindingNames(sourceFile: ts.SourceFile): Set<string> {
       ts.isIdentifier(node.initializer) &&
       names.has(node.initializer.text)
     ) {
-      if (node.name.text === "useState") shadowed = true;
+      if (STATE_HOOKS.has(node.name.text)) shadowed.add(node.name.text);
       else names.add(node.name.text);
     }
     ts.forEachChild(node, visit);
   }
   visit(sourceFile);
 
-  if (shadowed) names.delete("useState");
+  for (const name of shadowed) names.delete(name);
   return names;
 }
 
@@ -455,7 +464,7 @@ function matchPropBinding(
   return undefined;
 }
 
-export function retrieveLeastCommonAncestorFromRoot(root: DrillerRoot): DrillerRoot | DrillerNode {
+export function retrieveClosestCommonParentFromRoot(root: DrillerRoot): DrillerRoot | DrillerNode {
   if (hasGetOrSet(root.usage)) {
     return root;
   }
