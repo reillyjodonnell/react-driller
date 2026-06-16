@@ -1,5 +1,8 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 
 const DRILLING_FIXTURE = "e2e/1-simple/app.tsx";
 const COLOCATED_FIXTURE = "e2e/4-colocated/app.tsx";
@@ -16,11 +19,6 @@ const ABSOLUTE_HOME_PREFIX = ["", "Users", ""].join("/");
 // (oxlint no-control-regex); 27 === 0x1b.
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 const stripAnsi = (s: string) => s.replace(ANSI_PATTERN, "");
-
-// Git's canonical empty-tree object. Diffing against it reports every tracked
-// file as added, so the --diff tests below stay deterministic regardless of
-// what the working branch happens to differ from `main` by.
-const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 type CliRun = { code: number; stdout: string; stderr: string };
 
@@ -104,14 +102,66 @@ describe("cli default text output is preserved", () => {
   });
 });
 
+// The --diff tests exercise the CLI's git integration, so they need a git
+// repo. Pointing them at the ambient checkout made them depend on its branch
+// layout and working-tree state — `main` is absent on a fresh CI clone, which
+// flipped `git diff main` from "no changes" to "fatal: bad revision" and broke
+// otherwise-green tests. Instead each run gets a self-contained throwaway repo
+// built in the OS temp dir, so the suite is hermetic and OS-independent.
+const SIMPLE_SRC = fs.readFileSync(path.resolve(process.cwd(), DRILLING_FIXTURE), "utf8");
+const COLOCATED_SRC = fs.readFileSync(path.resolve(process.cwd(), COLOCATED_FIXTURE), "utf8");
+
+function git(cwd: string, args: string[]): void {
+  execFileSync("git", args, { cwd, stdio: "ignore" });
+}
+
+function writeFixture(root: string, rel: string, content: string): void {
+  const abs = path.join(root, rel);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, content);
+}
+
+// Builds a repo whose `main` branch lacks the fixtures and whose checked-out
+// `feature` branch adds them, so `git diff main` deterministically reports the
+// two .tsx files as changed regardless of the host's git defaults.
+function makeDiffRepo(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "react-driller-diff-"));
+  git(root, ["init"]);
+  git(root, ["config", "user.email", "test@example.com"]);
+  git(root, ["config", "user.name", "react-driller tests"]);
+  git(root, ["config", "commit.gpgsign", "false"]);
+
+  fs.writeFileSync(path.join(root, "README.md"), "base\n");
+  git(root, ["add", "."]);
+  git(root, ["commit", "-m", "base"]);
+  git(root, ["branch", "-M", "main"]); // normalize whatever init named the branch
+
+  git(root, ["checkout", "-b", "feature"]);
+  writeFixture(root, DRILLING_FIXTURE, SIMPLE_SRC);
+  writeFixture(root, COLOCATED_FIXTURE, COLOCATED_SRC);
+  git(root, ["add", "."]);
+  git(root, ["commit", "-m", "add fixtures"]);
+  return root;
+}
+
 describe("cli --diff", () => {
+  let repo: string;
+
+  beforeAll(() => {
+    repo = makeDiffRepo();
+  });
+
+  afterAll(() => {
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
   it("is recognized as a flag rather than rejected as unknown", async () => {
-    const { stderr } = await runCli(["--diff", "e2e/"]);
+    const { stderr } = await runCli(["--diff", "e2e/"], repo);
     expect(stripAnsi(stderr)).not.toContain("unknown flag");
   });
 
   it("composes with --json and yields valid JSON", async () => {
-    const { code, stdout } = await runCli(["--json", "--diff"]);
+    const { code, stdout } = await runCli(["--json", "--diff"], repo);
     expect(code).toBe(0);
     expect(() => JSON.parse(stdout.trim())).not.toThrow();
   });
@@ -119,40 +169,37 @@ describe("cli --diff", () => {
   it("treats a positional arg after --diff as a path root, not the base ref", async () => {
     // Regression: the old greedy `--diff [base]` form swallowed `e2e/` as the
     // base ref and scanned nothing. With split flags it is a path root.
-    const { stderr } = await runCli(["--diff", "e2e/"]);
+    const { stderr } = await runCli(["--diff", "e2e/"], repo);
     expect(stripAnsi(stderr)).not.toContain("could not run git diff");
     expect(stripAnsi(stderr)).not.toContain("not found");
   });
 
   it("exits 1 with a clear error when --diff-base is an invalid ref", async () => {
-    const { code, stderr } = await runCli(["--diff", "--diff-base", "totally-bogus-ref-xyz123"]);
+    const { code, stderr } = await runCli(
+      ["--diff", "--diff-base", "totally-bogus-ref-xyz123"],
+      repo,
+    );
     expect(code).toBe(1);
     expect(stripAnsi(stderr)).toContain("could not run git diff");
   });
 
   it("exits 1 when --diff-base is given without --diff", async () => {
-    const { code, stderr } = await runCli(["--diff-base", "develop", "e2e/"]);
+    const { code, stderr } = await runCli(["--diff-base", "develop", "e2e/"], repo);
     expect(code).toBe(1);
     expect(stripAnsi(stderr)).toContain("--diff-base requires --diff");
   });
 
   it("exits 1 when --diff-base has no value", async () => {
-    const { code, stderr } = await runCli(["--diff", "--diff-base"]);
+    const { code, stderr } = await runCli(["--diff", "--diff-base"], repo);
     expect(code).toBe(1);
     expect(stripAnsi(stderr)).toContain("--diff-base requires a git ref");
   });
 
   it("intersects the changed set with a file root (regression for <= vs <)", async () => {
     // The maintainer's repro: a root that is a full file path must be kept.
-    // Against the empty tree COLOCATED_FIXTURE is in the changed set, so it
-    // survives intersection with its own path.
-    const { code, stdout } = await runCli([
-      "--json",
-      "--diff",
-      "--diff-base",
-      EMPTY_TREE,
-      COLOCATED_FIXTURE,
-    ]);
+    // COLOCATED_FIXTURE is a new file versus the default base, so it appears
+    // in the changed set and survives intersection with its own path.
+    const { code, stdout } = await runCli(["--json", "--diff", COLOCATED_FIXTURE], repo);
     expect(code).toBe(0);
     const parsed = JSON.parse(stdout.trim());
     expect(parsed.summary.filesScanned).toBeGreaterThanOrEqual(1);
@@ -162,8 +209,8 @@ describe("cli --diff", () => {
     // Regression for comment #1: git emits repo-root-relative paths, so running
     // --diff from a subdirectory must still find changed files. The old code
     // resolved against cwd and reported nothing.
-    const subdir = path.join(process.cwd(), "e2e");
-    const { code, stdout } = await runCli(["--json", "--diff", "--diff-base", EMPTY_TREE], subdir);
+    const subdir = path.join(repo, "e2e");
+    const { code, stdout } = await runCli(["--json", "--diff"], subdir);
     expect(code).toBe(0);
     const parsed = JSON.parse(stdout.trim());
     expect(parsed.summary.filesScanned).toBeGreaterThanOrEqual(1);
