@@ -162,32 +162,29 @@ And your agent can fix it
 
 thanks for checking it out <3
 
-## What's supported
+## Supported
 
-- State-hook roots: `const [v, setV] = useState(...)` and `const [s, dispatch] = useReducer(...)` (setter/dispatch tracked as the updater)
-- Function components: `function Foo()`, `const Foo = () => ...`, `const Foo = function() {}` (PascalCase)
-- HOC-wrapped components: `memo`, `forwardRef`, and curried HOCs (`withX(...)`, `connect(opts)(...)`) — as owners and as children
-- Cross-file traversal — follows alias symbols across imports via the TS checker
-- Read-vs-forward distinction per state value (separately for getter and setter)
-- Child prop destructure incl. renames (`{ value: v }`) and rest (`{ x, ...rest }`)
-- Spread props (shorthand keys): `<Child {...props} />` and `<Child {...{ count }} />`
-- `children` prop pass-through: `children={<Inner v={v}/>}`
-- Closest-common-parent suggestion (where to _lift state up_) across multiple siblings
-- Multiple `useState`s per component, multiple roots per file
-- Directory walking for `.tsx`/`.jsx` (ignores `node_modules`, `dist`, `.next`, …)
+Does react-driller understand your code? ✅ yes · 🚧 not yet · — out of scope
 
-## What isn't yet supported
+| What you write                                                            | Status |
+| ------------------------------------------------------------------------- | :----: |
+| **State**                                                                 |        |
+| `useState`, `useReducer`                                                  |   ✅   |
+| Custom hooks that own state (`const [v, setV] = useToggle()`)             |   🚧   |
+| Context / external stores (Redux, Zustand) — these _solve_ drilling       |   —    |
+| **Components**                                                             |        |
+| `function`, arrow, and function-expression components                     |   ✅   |
+| `memo`, `forwardRef`, HOCs (`connect(...)`, `withX(...)`)                  |   ✅   |
+| **Passing state down**                                                     |        |
+| Props, including renamed and rest destructure (`{ value: v }`, `...rest`) |   ✅   |
+| Spread props (`<Child {...props} />`)                                     |   ✅   |
+| Rest-spread pass-through (`function W({ ...rest }) { return <Inner {...rest} /> }`) |   🚧   |
+| HTML attributes (`<input value={v} onChange={setV} />`)                   |   ✅   |
+| `children` composition — correctly kept local, not flagged                |   ✅   |
+| Handler props (`onChange={() => setV(v)}`)                                |   🚧   |
+| Derived values passed down (`const x = v * 2; <Child x={x} />`)           |   🚧   |
+| **Reach**                                                                  |        |
+| Cross-file, multiple states per component, recursive directory scan       |   ✅   |
+| Closest-common-parent suggestion + CI gating (`--fail-on`)               |   ✅   |
 
-- Non-array destructure: `const s = useState(0); s[0]`
-- Custom hooks wrapping `useState`/`useReducer` (`const [v, setV] = useCounter()`)
-- Other state primitives: `useRef`, `useContext`, `useSyncExternalStore`
-- Aliased spread keys (`<Child {...{ alias: state }} />`) and rest-spread pass-through (`function W({ ...rest }) { return <Inner {...rest} /> }`)
-- Anonymous default exports (no binding to name): `export default () => {}`, `export default memo(() => ...)`
-- Barrel re-exports: `export { Foo } from "./foo"`
-- Namespaced JSX: `<motion.div>`, `<Foo.Bar>`
-- HOC calls with no inline render function: `const Made = makeFoo()` (the component lives inside `makeFoo`, so there's nothing local to attribute state to — unlike `memo(() => ...)` where the function is right there)
-- Dynamic tag: `const Cmp = cond ? A : B; <Cmp />`
-- Class component children (`extends React.Component`)
-- Render-prop / children-as-function: `<Wrap>{(x) => <Inner v={v}/>}</Wrap>`
-- lowercase-named custom components
-- `node_modules` components (will try to drill in)
+See [Known limitations](./LIMITATIONS.md) for everything that isn't handled yet (class components, namespaced tags, custom hooks, …) and gotchas to be aware of.

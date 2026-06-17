@@ -513,6 +513,51 @@ describe("scanNode — how state flows", () => {
       expect(root.children.length).toBe(0);
     });
 
+    // A value read directly into a host-element attribute (`<input value={name}/>`)
+    // is consumed right here, not forwarded — a host tag has no component to drill
+    // into. Marked as Gets on the enclosing component.
+    it("marks Gets for state read into a host-element attribute", () => {
+      const root = analyzeRoot(`
+      function App() {
+        const [name, setName] = useState("");
+        return <input value={name} readOnly />;
+      }
+    `);
+
+      expect(root.usage).toBe(Usage.Gets);
+      expect(root.children.length).toBe(0);
+    });
+
+    // A setter passed *bare* (no wrapping arrow) as a host event handler
+    // (`onClick={setN}`) is also a use, not a forward — the identifier sits
+    // directly on the attribute of a host tag. Marked as Sets.
+    it("marks Sets for a bare setter on a host event handler", () => {
+      const root = analyzeRoot(`
+      function App() {
+        const [n, setN] = useState(0);
+        return <button onClick={setN}>+</button>;
+      }
+    `);
+
+      expect(root.usage).toBe(Usage.Sets);
+      expect(root.children.length).toBe(0);
+    });
+
+    // The canonical controlled input: the value is read into the `value`
+    // attribute (Gets) and the setter is called from the `onChange` handler
+    // (Sets). Both are local uses on a host element, so nothing is forwarded.
+    it("marks Gets and Sets for a controlled input (value + onChange setter)", () => {
+      const root = analyzeRoot(`
+      function App() {
+        const [name, setName] = useState("");
+        return <input value={name} onChange={(e) => setName(e.target.value)} />;
+      }
+    `);
+
+      expect(root.usage).toBe(Usage.Gets | Usage.Sets);
+      expect(root.children.length).toBe(0);
+    });
+
     // State referenced inside a JSX fragment's text content (not in any
     // attribute position) should be marked as Gets, mirroring the
     // `<button>{count}</button>` case but using a `<>...</>` wrapper.
@@ -839,6 +884,30 @@ describe("scanNode — how state flows", () => {
     `);
       expect(root?.children).toHaveLength(0); // FLIP when aliased spread keys are tracked
     });
+
+    // State distributed via Context (`<Ctx.Provider value={user}>`) is a
+    // deliberate scope boundary, not drilling. `Ctx.Provider` doesn't resolve to
+    // a component function, so the `value={user}` read lands on the host-element
+    // branch and counts as a local Get — which is correct: the state lives at the
+    // provider, not drilled. What stays out of scope is the *consumer* side
+    // (`useContext`), so no child is created and the state correctly reads as
+    // owned here. Context is the cure for drilling, so this is the intended shape.
+    it("treats a Context provider value as a local read, not a drill", () => {
+      const root = analyzeRoot(`
+      const Ctx = createContext(null);
+      function App() {
+        const [user, setUser] = useState(null);
+        return (
+          <Ctx.Provider value={user}>
+            <Child />
+          </Ctx.Provider>
+        );
+      }
+      function Child() { return <span />; }
+    `);
+      expect(root.usage).toBe(Usage.Gets); // provider reads user; consumers via useContext are not modeled
+      expect(root.children.length).toBe(0);
+    });
   });
 
   describe("spread props", () => {
@@ -1104,4 +1173,116 @@ describe("retrieveClosestCommonParentFromRoot — where to lift state up", () =>
     const commonParent = retrieveClosestCommonParentFromRoot(root);
     expect(commonParent.name).toBe("Middle");
   });
+
+  // `name` is drilled into Field, whose only consumption is a host-element
+  // attribute (`<input value={name}/>`). Now that host-attr reads count as a use,
+  // Field registers as the real consumer and the state lifts to Field rather than
+  // looking like it lives unused at the declaring component.
+  it("lifts to the child that consumes state through a host-element attribute", () => {
+    const root = analyzeRoot(`
+      function App() {
+        const [name, setName] = useState("");
+        return <Field name={name} />;
+      }
+      function Field({ name }) {
+        return <input value={name} readOnly />;
+      }
+    `);
+    const commonParent = retrieveClosestCommonParentFromRoot(root);
+    expect(commonParent.name).toBe("Field");
+  });
+});
+
+/**
+ * ┌─ 0.2.0 production-readiness gate ──────────────────────────────────────────┐
+ * These tests assert the *correct* (desired) behavior for patterns real React
+ * codebases use constantly but the analyzer doesn't yet handle. They are marked
+ * `it.failing`, so:
+ *   - while the gap exists the assertion fails → Bun reports (pass) → CI green;
+ *   - the moment the gap is fixed the assertion passes → Bun reports (fail) with
+ *     "marked as failing but it passed" → CI red → remove `.failing` and the
+ *     test becomes a permanent regression guard.
+ *
+ * This block is the executable checklist for 0.2.0: **ship when it is empty.**
+ * Do NOT pin current (wrong) behavior here — that belongs in a "known gaps"
+ * block as a green test (e.g. Context distribution, which is the *cure* for
+ * drilling and an intentional non-goal, stays pinned green above).
+ *
+ * When closing a gap: delete `.failing`, drop the related green "known gaps"
+ * pin if it now contradicts reality, and update the README DO/DON'T lists.
+ * └────────────────────────────────────────────────────────────────────────────┘
+ */
+describe("0.2.0 production-readiness gaps (it.failing — green until fixed)", () => {
+  // GAP: the idiomatic alternative to drilling a raw setter is a handler prop
+  // (`<Field onChange={(x) => setV(x)} />`). The setter call sits in an arrow on
+  // a JSX attribute, recorded as a local Set, so the drill into Field is missed.
+  it.failing("forwards a setter wrapped in a handler prop into the child", () => {
+    const root = analyzeRoot(`
+      function App() {
+        const [v, setV] = useState("");
+        return <Field onChange={(x) => setV(x)} />;
+      }
+      function Field({ onChange }) {
+        return <input onChange={(e) => onChange(e.target.value)} />;
+      }
+    `);
+    expect(root.children.length).toBe(1);
+    expect(root.children[0]?.name).toBe("Field");
+  });
+
+  // GAP: same shape, one indirection further — the setter is wrapped in
+  // useCallback and the resulting handler is drilled. The setter is read locally
+  // inside the callback and the forwarded symbol isn't tied back to the state.
+  it.failing("forwards a setter wrapped in useCallback into the child", () => {
+    const root = analyzeRoot(`
+      function App() {
+        const [v, setV] = useState("");
+        const onChange = useCallback((x) => setV(x), []);
+        return <Field onChange={onChange} />;
+      }
+      function Field({ onChange }) {
+        return <input onChange={(e) => onChange(e.target.value)} />;
+      }
+    `);
+    expect(root.children.length).toBe(1);
+    expect(root.children[0]?.name).toBe("Field");
+  });
+
+  // GAP: a value derived from state (`const doubled = c * 2`) and passed down is
+  // read as a plain Gets; the derived symbol that's forwarded isn't tied back to
+  // the source state, so the drill of `c` (via `doubled`) into View is missed.
+  it.failing("follows a value derived from state forwarded to a child", () => {
+    const root = analyzeRoot(`
+      function App() {
+        const [c, setC] = useState(0);
+        const doubled = c * 2;
+        return <View n={doubled} />;
+      }
+      function View({ n }) { return <span>{n}</span>; }
+    `);
+    expect(root.children.length).toBe(1);
+    expect(root.children[0]?.name).toBe("View");
+  });
+
+  // GAP: `bio` is forwarded to Preview (the real consumer) *and* referenced in an
+  // `onSave` handler App passes down — App never renders bio itself. The handler
+  // reference is recorded as a local Gets, and the early-return in
+  // retrieveClosestCommonParentFromRoot treats any local get/set as "lives here",
+  // suppressing the real drill. This is the dominant false-negative on real apps,
+  // where an owner usually references its own state while passing it down.
+  it.failing(
+    "does not treat a reference inside a down-passed callback as local consumption",
+    () => {
+      const root = analyzeRoot(`
+      function App() {
+        const [bio, setBio] = useState("");
+        return <Preview bio={bio} onSave={() => save(bio)} />;
+      }
+      function Preview({ bio, onSave }) {
+        return <span>{bio}</span>;
+      }
+    `);
+      expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Preview");
+    },
+  );
 });
