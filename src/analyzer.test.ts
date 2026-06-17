@@ -458,6 +458,115 @@ describe("useStateExtractor — where state is declared", () => {
       expect(roots).toHaveLength(0); // FLIP to 1 when default exports are named
     });
   });
+
+  // A custom-hook call is a `useState` at the call site — the *calling* component
+  // owns the instance, so it becomes the root and the destructured bindings take
+  // their getter/setter roles from how the hook's return expression reads/forwards
+  // its internal state. Roles are traced through the hook body, never inferred
+  // from `setX` naming (real hooks expose `increment`, `toggle`, `reset`, …).
+  describe("custom hooks that own state", () => {
+    // 1. Tuple return — the useState mirror. `toggle` is a useCallback carrier of
+    // the internal setter; slot 0 reads the value, slot 1 forwards the setter.
+    it("drills a tuple-returning hook (useToggle) into the child", () => {
+      const root = analyzeRoot(`
+        function useToggle(init = false) {
+          const [on, setOn] = useState(init);
+          const toggle = useCallback(() => setOn((o) => !o), []);
+          return [on, toggle];
+        }
+        function App() {
+          const [open, toggleOpen] = useToggle();
+          return <Panel open={open} onToggle={toggleOpen} />;
+        }
+        function Panel({ open, onToggle }) {
+          return <button onClick={onToggle}>{open ? "on" : "off"}</button>;
+        }
+      `);
+      expect(root.name).toBe("App");
+      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Panel");
+      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
+    });
+
+    // 2. Object return with named actions (NOT setX) — the trace-don't-name case.
+    // `increment`/`reset` close over the internal setter, so both are setters.
+    it("drills an object-returning action hook (useCounter)", () => {
+      const root = analyzeRoot(`
+        function useCounter(start = 0) {
+          const [count, setCount] = useState(start);
+          return {
+            count,
+            increment: () => setCount((c) => c + 1),
+            reset: () => setCount(0),
+          };
+        }
+        function App() {
+          const { count, increment, reset } = useCounter();
+          return <Display count={count} onInc={increment} onReset={reset} />;
+        }
+        function Display({ count, onInc, onReset }) {
+          return (
+            <div>
+              {count}
+              <button onClick={onInc}>+</button>
+              <button onClick={onReset}>0</button>
+            </div>
+          );
+        }
+      `);
+      expect(root.name).toBe("App");
+      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Display");
+      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
+    });
+
+    // 3. Renamed object destructure at the call site (`{ value: email, setValue: setEmail }`)
+    // — slots are matched by property name, then bound to the renamed locals.
+    it("drills an object hook through a renamed destructure (useField)", () => {
+      const root = analyzeRoot(`
+        function useField(init) {
+          const [value, setValue] = useState(init);
+          return { value, setValue };
+        }
+        function App() {
+          const { value: email, setValue: setEmail } = useField("");
+          return <Input value={email} onChange={setEmail} />;
+        }
+        function Input({ value, onChange }) {
+          return <input value={value} onChange={(e) => onChange(e.target.value)} />;
+        }
+      `);
+      expect(root.name).toBe("App");
+      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Input");
+      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
+    });
+
+    // 4. Pass-through: the hook returns the `useState` tuple directly, so the
+    // slots inherit useState's own (value, setter) roles.
+    it("drills a hook that returns the useState tuple directly (useName)", () => {
+      const root = analyzeRoot(`
+        function useName() {
+          return useState("");
+        }
+        function App() {
+          const [name, setName] = useName();
+          return <Field name={name} setName={setName} />;
+        }
+        function Field({ name, setName }) {
+          return <input value={name} onChange={(e) => setName(e.target.value)} />;
+        }
+      `);
+      expect(root.name).toBe("App");
+      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Field");
+      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
+    });
+  });
 });
 
 describe("scanNode — how state flows", () => {
@@ -1333,114 +1442,8 @@ describe("retrieveClosestCommonParentFromRoot — where to lift state up", () =>
  * └────────────────────────────────────────────────────────────────────────────┘
  */
 describe("0.2.0 production-readiness gaps (it.failing — green until fixed)", () => {
-  // GAP: custom hooks that own state. A hook call is a `useState` at the call
-  // site — the *calling* component owns the instance — so the root is the caller
-  // and the destructured bindings take their getter/setter roles from how the
-  // hook's return expression reads/forwards its internal state. Roles are traced
-  // through the hook body, not inferred from `setX` naming (real hooks expose
-  // `increment`, `toggle`, `reset`, …). Today the internal `useState` is skipped
-  // for lack of a PascalCase owner, so no root is produced at all.
-  describe("custom hooks that own state", () => {
-    // 1. Tuple return — the useState mirror. `toggle` is a useCallback carrier of
-    // the internal setter; slot 0 reads the value, slot 1 forwards the setter.
-    it.failing("drills a tuple-returning hook (useToggle) into the child", () => {
-      const root = analyzeRoot(`
-        function useToggle(init = false) {
-          const [on, setOn] = useState(init);
-          const toggle = useCallback(() => setOn((o) => !o), []);
-          return [on, toggle];
-        }
-        function App() {
-          const [open, toggleOpen] = useToggle();
-          return <Panel open={open} onToggle={toggleOpen} />;
-        }
-        function Panel({ open, onToggle }) {
-          return <button onClick={onToggle}>{open ? "on" : "off"}</button>;
-        }
-      `);
-      expect(root.name).toBe("App");
-      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
-      expect(root.children.length).toBe(1);
-      expect(root.children[0]?.name).toBe("Panel");
-      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
-    });
-
-    // 2. Object return with named actions (NOT setX) — the trace-don't-name case.
-    // `increment`/`reset` close over the internal setter, so both are setters.
-    it.failing("drills an object-returning action hook (useCounter)", () => {
-      const root = analyzeRoot(`
-        function useCounter(start = 0) {
-          const [count, setCount] = useState(start);
-          return {
-            count,
-            increment: () => setCount((c) => c + 1),
-            reset: () => setCount(0),
-          };
-        }
-        function App() {
-          const { count, increment, reset } = useCounter();
-          return <Display count={count} onInc={increment} onReset={reset} />;
-        }
-        function Display({ count, onInc, onReset }) {
-          return (
-            <div>
-              {count}
-              <button onClick={onInc}>+</button>
-              <button onClick={onReset}>0</button>
-            </div>
-          );
-        }
-      `);
-      expect(root.name).toBe("App");
-      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
-      expect(root.children.length).toBe(1);
-      expect(root.children[0]?.name).toBe("Display");
-      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
-    });
-
-    // 3. Renamed object destructure at the call site (`{ value: email, setValue: setEmail }`)
-    // — slots are matched by property name, then bound to the renamed locals.
-    it.failing("drills an object hook through a renamed destructure (useField)", () => {
-      const root = analyzeRoot(`
-        function useField(init) {
-          const [value, setValue] = useState(init);
-          return { value, setValue };
-        }
-        function App() {
-          const { value: email, setValue: setEmail } = useField("");
-          return <Input value={email} onChange={setEmail} />;
-        }
-        function Input({ value, onChange }) {
-          return <input value={value} onChange={(e) => onChange(e.target.value)} />;
-        }
-      `);
-      expect(root.name).toBe("App");
-      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
-      expect(root.children.length).toBe(1);
-      expect(root.children[0]?.name).toBe("Input");
-      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
-    });
-
-    // 4. Pass-through: the hook returns the `useState` tuple directly, so the
-    // slots inherit useState's own (value, setter) roles.
-    it.failing("drills a hook that returns the useState tuple directly (useName)", () => {
-      const root = analyzeRoot(`
-        function useName() {
-          return useState("");
-        }
-        function App() {
-          const [name, setName] = useName();
-          return <Field name={name} setName={setName} />;
-        }
-        function Field({ name, setName }) {
-          return <input value={name} onChange={(e) => setName(e.target.value)} />;
-        }
-      `);
-      expect(root.name).toBe("App");
-      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
-      expect(root.children.length).toBe(1);
-      expect(root.children[0]?.name).toBe("Field");
-      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
-    });
-  });
+  // Empty: every gap tracked here has been closed and promoted to a permanent
+  // regression guard (useCallback-wrapped handlers → "handler props"; derived
+  // values → "derived values …"; custom hooks → "custom hooks that own state").
+  // Add the next unhandled real-world pattern here as `it.failing` when one surfaces.
 });

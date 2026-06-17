@@ -8,8 +8,11 @@ For supported React patterns, see the table in the [README](./README.md#supporte
 
 ## Planned 🚧
 
-- **Custom hooks that own state** — `const [v, setV] = useToggle()`. Only literal
-  `useState` / `useReducer` are recognized as roots. This is actively being worked on.
+- **Multiple states from one custom hook** — `const { a, setA, b, setB } = useThing()`.
+  A state-owning custom hook _is_ drilled — tuple or object return, including renamed
+  destructure and a direct `return useState(...)` — but when one hook exposes several
+  _independent_ states they're currently merged into a single root, which can blur the
+  lifted-state suggestion. One state per hook is handled precisely.
 - **Rest-spread pass-through** — `function W({ ...rest }) { return <Inner {...rest} /> }`.
   Common in wrapper / design-system components; the forwarded `...rest` isn't
   traced onward.
@@ -32,7 +35,8 @@ Patterns that aren't prop drilling, or are too rare to be worth the complexity.
   component lives inside `makeFoo`, so there's nothing local to attribute state to
   (unlike `memo(() => ...)`, where the render function is right there).
 - **Dynamically-chosen tags** — `const Cmp = cond ? A : B; <Cmp />`.
-- **Non-array destructure** — `const s = useState(0); s[0]`.
+- **Non-array destructure** — `const s = useState(0); s[0]`, or a custom-hook result
+  used without destructuring (`const t = useToggle(); t[0]`, `controls.open`).
 - **lowercase-named custom components** — these read as host elements.
 
 ## Gotchas ⚠️

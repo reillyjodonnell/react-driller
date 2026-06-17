@@ -170,7 +170,7 @@ Does react-driller understand your code? ✅ yes · 🚧 not yet · — out of s
 | ------------------------------------------------------------------------- | :----: |
 | **State**                                                                 |        |
 | `useState`, `useReducer`                                                  |   ✅   |
-| Custom hooks that own state (`const [v, setV] = useToggle()`)             |   🚧   |
+| Custom hooks that own state (`const [v, setV] = useToggle()`, object returns) | ✅ |
 | Context / external stores (Redux, Zustand) — these _solve_ drilling       |   —    |
 | **Components**                                                             |        |
 | `function`, arrow, and function-expression components                     |   ✅   |
@@ -187,4 +187,4 @@ Does react-driller understand your code? ✅ yes · 🚧 not yet · — out of s
 | Cross-file, multiple states per component, recursive directory scan       |   ✅   |
 | Closest-common-parent suggestion + CI gating (`--fail-on`)               |   ✅   |
 
-See [Known limitations](./LIMITATIONS.md) for everything that isn't handled yet (class components, namespaced tags, custom hooks, …) and gotchas to be aware of.
+See [Known limitations](./LIMITATIONS.md) for everything that isn't handled yet (class components, namespaced tags, …) and gotchas to be aware of.
