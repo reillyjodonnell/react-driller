@@ -19,10 +19,71 @@ export function useStateExtractor(
   checker: ts.TypeChecker,
 ): DrillerRoot[] {
   const roots: DrillerRoot[] = [];
-  const useStateNames = collectUseStateBindingNames(sourceFile);
+  const stateHookNames = collectStateHookNames(sourceFile);
+  // Memoize each custom hook's return shape — a hook called from several
+  // components is analyzed once.
+  const hookShapeCache = new Map<HookFn, HookStateShape | undefined>();
+
+  function hookShapeFor(fn: HookFn): HookStateShape | undefined {
+    if (hookShapeCache.has(fn)) return hookShapeCache.get(fn);
+    const shape = analyzeHookStateShape(fn, checker);
+    hookShapeCache.set(fn, shape);
+    return shape;
+  }
+
+  // `const [open, toggle] = useToggle()` — a custom hook that owns state is a
+  // useState at the call site, so the calling component becomes a root and the
+  // destructured bindings take their roles from the hook's return shape.
+  function maybeRootFromHookCall(call: ts.CallExpression, decl: ts.VariableDeclaration) {
+    const name = calleeName(call);
+    if (!name || !isHookCalleeName(name)) return;
+    const hookFn = resolveCalleeFunction(call, checker);
+    if (!hookFn) return;
+    const shape = hookShapeFor(hookFn);
+    if (!shape) return;
+
+    const componentOwner = getEnclosingComponentFunction(call);
+    if (!componentOwner) {
+      debug("skip: state-owning hook called outside a component — %s", nodeLoc(call));
+      return;
+    }
+    const ownerSymbol = getFunctionOwnerSymbol(componentOwner, checker);
+    if (!ownerSymbol) return;
+
+    const getter = new Set<ts.Symbol>();
+    const setter = new Set<ts.Symbol>();
+    bindHookSlots(decl.name, shape, getter, setter, checker);
+    if (getter.size === 0 && setter.size === 0) {
+      debug("skip: hook result not destructured into state bindings — %s", nodeLoc(call));
+      return;
+    }
+
+    const sf = call.getSourceFile();
+    const { line, character } = sf.getLineAndCharacterOfPosition(call.getStart(sf));
+    roots.push({
+      children: [],
+      name: ownerSymbol.getName(),
+      parent: null,
+      getter,
+      setter,
+      source: { column: character + 1, file: sf.fileName, line: line + 1 },
+      type: "root",
+      usage: Usage.None,
+      ownerComponentFunction: componentOwner,
+      jsxElement: null,
+    });
+  }
 
   function visit(node: ts.Node) {
-    if (ts.isCallExpression(node) && isUseStateCall(node, useStateNames)) {
+    if (
+      ts.isCallExpression(node) &&
+      !isStateHookCall(node, stateHookNames) &&
+      ts.isVariableDeclaration(node.parent) &&
+      node.parent.initializer === node
+    ) {
+      maybeRootFromHookCall(node, node.parent);
+    }
+    if (ts.isCallExpression(node) && isStateHookCall(node, stateHookNames)) {
       if (ts.isVariableDeclaration(node.parent) && ts.isArrayBindingPattern(node.parent.name)) {
         const [valueBinding, setterBinding] = node.parent.name.elements;
 
@@ -92,37 +153,46 @@ export function useStateExtractor(
   return roots;
 }
 
-function isUseStateCall(node: ts.CallExpression, useStateNames: Set<string>): boolean {
-  // R.useState(...) / React.useState(...): match on the property name.
+// React state-producing hooks whose `[value, setter]` tuple the analyzer
+// models. useReducer's `[state, dispatch]` has the same array shape — dispatch
+// plays the setter's role — so both flow through the extractor identically.
+const STATE_HOOKS = new Set(["useState", "useReducer"]);
+
+function isStateHookCall(node: ts.CallExpression, hookNames: Set<string>): boolean {
+  // R.useState(...) / React.useReducer(...): match on the property name.
   // Namespace and default imports both land here.
-  if (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "useState") {
+  if (
+    ts.isPropertyAccessExpression(node.expression) &&
+    STATE_HOOKS.has(node.expression.name.text)
+  ) {
     return true;
   }
   if (!ts.isIdentifier(node.expression)) return false;
-  return useStateNames.has(node.expression.text);
+  return hookNames.has(node.expression.text);
 }
 
-// One pass over the source file: collect every identifier that refers to
-// React's `useState` in this file. Cheaper than a per-call symbol lookup —
+// One pass over the source file: collect every identifier that refers to one
+// of React's state hooks (useState / useReducer) in this file, accounting for
+// import renames and local re-bindings. Cheaper than a per-call symbol lookup —
 // the call-site check is then a Set hit.
-function collectUseStateBindingNames(sourceFile: ts.SourceFile): Set<string> {
-  const names = new Set<string>(["useState"]);
-  let shadowed = false;
+function collectStateHookNames(sourceFile: ts.SourceFile): Set<string> {
+  const names = new Set<string>(STATE_HOOKS);
+  const shadowed = new Set<string>();
 
   function visit(node: ts.Node) {
-    // import { useState [as X] } from "react"  →  bind the local name
+    // import { useState [as X], useReducer [as Y] } from "react"  →  local names
     if (ts.isImportDeclaration(node) && node.importClause) {
       const named = node.importClause.namedBindings;
       if (named && ts.isNamedImports(named)) {
         for (const spec of named.elements) {
           const original = (spec.propertyName ?? spec.name).text;
-          if (original === "useState") names.add(spec.name.text);
+          if (STATE_HOOKS.has(original)) names.add(spec.name.text);
         }
       }
     }
-    // function useState(...) {}  →  shadows the hook in this file
-    if (ts.isFunctionDeclaration(node) && node.name?.text === "useState") {
-      shadowed = true;
+    // function useState(...) {}  →  a local declaration shadows the hook
+    if (ts.isFunctionDeclaration(node) && node.name && STATE_HOOKS.has(node.name.text)) {
+      shadowed.add(node.name.text);
     }
     // const u = useState  →  pick up the re-binding
     if (
@@ -132,14 +202,14 @@ function collectUseStateBindingNames(sourceFile: ts.SourceFile): Set<string> {
       ts.isIdentifier(node.initializer) &&
       names.has(node.initializer.text)
     ) {
-      if (node.name.text === "useState") shadowed = true;
+      if (STATE_HOOKS.has(node.name.text)) shadowed.add(node.name.text);
       else names.add(node.name.text);
     }
     ts.forEachChild(node, visit);
   }
   visit(sourceFile);
 
-  if (shadowed) names.delete("useState");
+  for (const name of shadowed) names.delete(name);
   return names;
 }
 
@@ -154,23 +224,39 @@ function isComponentFn(n: ts.Node): n is ComponentFn {
   return name !== undefined && isPascalCase(name);
 }
 
-function getFunctionName(fn: ComponentFn): string | undefined {
-  // outer binding (what JSX consumers reference) wins:
-  // const App = () => {...}  OR  const App = function() {...}  OR  const Outer = function Inner() {...}
-  if (
-    (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
-    ts.isVariableDeclaration(fn.parent) &&
-    ts.isIdentifier(fn.parent.name)
-  ) {
-    return fn.parent.name.text;
+// The identifier that names this component: the variable it's bound to
+// (through any memo()/forwardRef() wrapper), or the function's own name for a
+// declaration / named function expression. The display name (.text) and the
+// owner symbol are both read off this one identifier, so the two can't drift.
+function maybeComponentNameIdentifier(fn: ComponentFn): ts.Identifier | undefined {
+  // read through any memo()/forwardRef() wrapper to the bound variable
+  if (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) {
+    const binding = maybeBindingThroughHOCWrapper(fn);
+    if (binding) return binding;
   }
   // function App() {...}  → fn.name is the Identifier "App"
-  if (ts.isFunctionDeclaration(fn) && fn.name) {
-    return fn.name.text;
-  }
+  if (ts.isFunctionDeclaration(fn) && fn.name) return fn.name;
   // named function expression with no outer binding (rare)
-  if (ts.isFunctionExpression(fn) && fn.name) {
-    return fn.name.text;
+  if (ts.isFunctionExpression(fn) && fn.name) return fn.name;
+  return undefined;
+}
+
+function getFunctionName(fn: ComponentFn): string | undefined {
+  return maybeComponentNameIdentifier(fn)?.text;
+}
+
+// A "binding" is a named thing e.g. the `App` in `const App = () => {};`.
+// Climb from an arrow/function-expression past any HOC call wrappers
+// (memo, forwardRef, observer, …) to the variable declaration that binds it
+// (const/let/var), and return that binding's identifier, so a component
+// written as `const App = memo(() => {...})` resolves to "App".
+function maybeBindingThroughHOCWrapper(fn: ts.Node): ts.Identifier | undefined {
+  let current: ts.Node = fn.parent;
+  while (current && ts.isCallExpression(current)) {
+    current = current.parent;
+  }
+  if (current && ts.isVariableDeclaration(current) && ts.isIdentifier(current.name)) {
+    return current.name;
   }
   return undefined;
 }
@@ -181,134 +267,549 @@ export function scanNode(
   queue: Array<DrillerRoot | DrillerNode>,
 ) {
   const fn = current.ownerComponentFunction;
-  // go to node's function body
-  function visit(node: ts.Node) {
-    if (ts.isIdentifier(node)) {
-      const symbol = checker.getSymbolAtLocation(node);
 
-      if (symbol) {
-        const getterMatch = current.getter.has(symbol);
-        const setterMatch = current.setter.has(symbol);
-
-        // pass over the getter and setter from the useState declaration
-        const isDeclarationName = ts.isBindingElement(node.parent) && node.parent.name === node;
-
-        if (!isDeclarationName) {
-          if (ts.isJsxExpression(node.parent)) {
-            // the grandparent should be a jsx attribute (need to confirm if it's 100% of time)
-            const maybeNodeAttachedToJsxElement = nodeAttachedToJsxElement(node);
-            if (maybeNodeAttachedToJsxElement) {
-              // find what component this is that's being passed
-              const jsxAttribute = getEnclosingJsxAttribute(node);
-              if (!jsxAttribute) {
-                if (getterMatch) current.usage |= Usage.Gets;
-                if (setterMatch) current.usage |= Usage.Sets;
-                return; // exit this visit() call; nothing to drill
-              }
-
-              const opening = jsxAttribute.parent.parent;
-              if (!opening) {
-                debug("skip: JSX attribute with no opening element — %s", nodeLoc(node));
-                return;
-              }
-              const propName = jsxAttribute
-                ? ts.isIdentifier(jsxAttribute.name)
-                  ? jsxAttribute.name.text
-                  : undefined
-                : undefined;
-
-              const childFn = resolveComponentFn(opening.tagName, checker); // jump
-
-              if (!childFn) {
-                /* host element → treat as use */
-              } else if (!getterMatch && !setterMatch) {
-                /* identifier sits on a JSX attribute but isn't this state's
-                   getter/setter — nothing to forward, skip without creating a child */
-              } else {
-                const newSymbol = childFn && matchPropBinding(childFn, propName ?? "", checker);
-
-                if (!newSymbol) {
-                  debug(
-                    "skip: prop %s didn't resolve to a child binding — %s",
-                    propName ?? "?",
-                    nodeLoc(node),
-                  );
-                  return;
-                }
-
-                const name = childFn.name?.text ?? newSymbol?.getName();
-
-                if (!name) {
-                  debug("skip: child component has no resolvable name — %s", nodeLoc(node));
-                  return;
-                }
-
-                // we treat getter and setter separately, so this logic will run twice for
-                // something like <MainPanel count={count} setCount={setCount} />
-                // so we will need to make sure it doesn't already have an entry
-                const existing = current.children.find((child) => child.jsxElement === opening);
-
-                let childSource;
-                if (!existing) {
-                  const childSourceFile = childFn.getSourceFile();
-                  const childPos = childFn.getStart(childSourceFile);
-                  const { line: cl, character: cc } =
-                    childSourceFile.getLineAndCharacterOfPosition(childPos);
-                  childSource = {
-                    column: cc + 1,
-                    file: childSourceFile.fileName,
-                    line: cl + 1,
-                  };
-                }
-
-                const child: DrillerNode = existing
-                  ? existing
-                  : createDrillerNode({
-                      name,
-                      parent: current,
-                      ownerComponentFunction: childFn,
-                      jsxElement: opening,
-                      source: childSource!,
-                    });
-                if (getterMatch) {
-                  child.getter.add(newSymbol!);
-                  current.usage |= Usage.ForwardsGetter;
-                }
-                if (setterMatch) {
-                  child.setter.add(newSymbol);
-                  current.usage |= Usage.ForwardsSetter;
-                }
-
-                if (!existing) {
-                  current.children.push(child);
-                  queue.push(child);
-                }
-              }
-            } else {
-              if (getterMatch) {
-                current.usage |= Usage.Gets;
-              }
-              if (setterMatch) {
-                current.usage |= Usage.Sets;
-              }
-            }
-          } else {
-            if (getterMatch) {
-              current.usage |= Usage.Gets;
-            }
-            if (setterMatch) {
-              current.usage |= Usage.Sets;
-            }
-          }
-        }
+  // <Child {...props} /> — resolve the spread to the object it forwards and
+  // route any of this state's getter/setter it carries to the child, keyed by
+  // the property the child destructures. Covers an inline `{...{ count }}` and
+  // a local `const props = { count }; <Child {...props} />`.
+  function forwardSpread(spread: ts.JsxSpreadAttribute) {
+    const object = resolveSpreadObject(spread.expression, checker);
+    if (!object) {
+      debug("skip: spread is not a statically-resolvable object — %s", nodeLoc(spread));
+      return;
+    }
+    const jsxOpeningElement = spread.parent.parent;
+    const childComponent = resolveComponentFn(jsxOpeningElement.tagName, checker);
+    for (const prop of object.properties) {
+      const entry = spreadPropEntry(prop, checker);
+      if (!entry) continue;
+      const getterMatch = current.getter.has(entry.valueSymbol);
+      const setterMatch = current.setter.has(entry.valueSymbol);
+      if (!getterMatch && !setterMatch) continue;
+      if (!childComponent) {
+        // spread onto a host element → the state is used here
+        if (getterMatch) current.usage |= Usage.Gets;
+        if (setterMatch) current.usage |= Usage.Sets;
+        continue;
       }
+      recordSymbolRemapToChild(
+        childComponent,
+        jsxOpeningElement,
+        entry.keyName,
+        getterMatch,
+        setterMatch,
+        spread,
+      );
+    }
+  }
+
+  // Find this child's existing node (deduped by its JSX usage site) or create and
+  // enqueue a new one. Named by the component's own name, falling back to the JSX
+  // tag the consumer wrote — `const C = () => {}` and `memo(() => {})` have no
+  // function name, so the tag keeps the component's real name.
+  function findOrCreateChildNode(
+    childComponent: ComponentFn,
+    jsxOpeningElement: ts.JsxOpeningLikeElement,
+  ): DrillerNode | undefined {
+    const existing = current.children.find((child) => child.jsxElement === jsxOpeningElement);
+    if (existing) return existing;
+
+    const tagName = jsxOpeningElement.tagName;
+    const name =
+      childComponent.name?.text ?? (ts.isIdentifier(tagName) ? tagName.text : tagName.getText());
+    if (!name) {
+      debug("skip: child component has no resolvable name — %s", nodeLoc(jsxOpeningElement));
+      return undefined;
     }
 
+    const sourceFile = childComponent.getSourceFile();
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(
+      childComponent.getStart(sourceFile),
+    );
+    const child = createDrillerNode({
+      name,
+      parent: current,
+      ownerComponentFunction: childComponent,
+      jsxElement: jsxOpeningElement,
+      source: {
+        file: sourceFile.fileName,
+        line: line + 1,
+        column: character + 1,
+      },
+    });
+    current.children.push(child);
+    queue.push(child);
+    return child;
+  }
+
+  // The tracked state crosses into the child under a *new symbol* — its prop
+  // parameter — so record that remap: resolve the child's symbol for `propName`
+  // and attach it to the child's node. (React: App passes this state to Child as
+  // a prop.) Getter and setter arrive as separate calls for the same element and
+  // converge on one (deduped) child node.
+  function recordSymbolRemapToChild(
+    childComponent: ComponentFn,
+    jsxOpeningElement: ts.JsxOpeningLikeElement,
+    propName: string,
+    getterMatch: boolean,
+    setterMatch: boolean,
+    node: ts.Node,
+  ) {
+    const childPropSymbol = matchPropBinding(childComponent, propName, checker);
+    if (!childPropSymbol) {
+      debug("skip: prop %s didn't resolve to a child binding — %s", propName, nodeLoc(node));
+      return;
+    }
+
+    const child = findOrCreateChildNode(childComponent, jsxOpeningElement);
+    if (!child) return;
+
+    if (getterMatch) {
+      child.getter.add(childPropSymbol);
+      current.usage |= Usage.ForwardsGetter;
+    }
+    if (setterMatch) {
+      child.setter.add(childPropSymbol);
+      current.usage |= Usage.ForwardsSetter;
+    }
+  }
+
+  // Record one reference to the tracked state inside this component: either it's
+  // passed to a child (forwarded) or it's used right here.
+  function recordStateReference(node: ts.Identifier) {
+    const symbol = checker.getSymbolAtLocation(node);
+    if (!symbol) return;
+
+    const isValue = current.getter.has(symbol);
+    const isSetter = current.setter.has(symbol);
+    if (!isValue && !isSetter) return;
+
+    // skip the value/setter binding in the useState declaration itself
+    if (ts.isBindingElement(node.parent) && node.parent.name === node) return;
+
+    // A spread (`<Child {...props} />`) is forwarded by forwardSpread, which reads
+    // the object's properties directly; the bare identifier here is not a use of
+    // its own. (Skipped explicitly because `props` is itself a tracked binding.)
+    if (ts.isJsxSpreadAttribute(node.parent) && node.parent.expression === node) {
+      return;
+    }
+
+    // State leaves this component only on a JSX attribute of a *child component*,
+    // either directly (`<Child v={state} />`) or via a handler that closes over it
+    // (`<Child onX={() => setState()} />`). Anything else — rendered output
+    // `{state}`, a derived value `{state + 1}`, an effect, a local call, or a
+    // host-element attribute — is a use right here.
+    const attribute =
+      ts.isJsxExpression(node.parent) && ts.isJsxAttribute(node.parent.parent)
+        ? node.parent.parent
+        : enclosingHandlerAttribute(node);
+    const childComponent =
+      attribute && resolveComponentFn(attribute.parent.parent.tagName, checker);
+    if (!attribute || !childComponent) {
+      // A reference inside a local binding's initializer is carried onward by that
+      // binding: collectTrackedBindings already added the binding to our getter/
+      // setter set, so it forwards (or is used) at the binding's own site. Counting
+      // it here too would double-count, and would wrongly mark a forwarded-only
+      // carrier (`const onChange = useCallback(() => setV(x))`) as a local Set.
+      if (withinLocalBinding(node)) return;
+      // used right here
+      if (isValue) current.usage |= Usage.Gets;
+      if (isSetter) current.usage |= Usage.Sets;
+      return;
+    }
+
+    const propName = ts.isIdentifier(attribute.name) ? attribute.name.text : undefined;
+    if (propName === undefined) {
+      debug("skip: JSX attribute with no resolvable name — %s", nodeLoc(node));
+      return;
+    }
+
+    recordSymbolRemapToChild(
+      childComponent,
+      attribute.parent.parent,
+      propName,
+      isValue,
+      isSetter,
+      node,
+    );
+  }
+
+  // Is this reference nested inside a local binding's initializer (rather than in
+  // render output, an effect, or a bare statement)? If so the enclosing binding is
+  // a tracked carrier (see growTrackedBindings) and owns the forwarding.
+  function withinLocalBinding(node: ts.Node): boolean {
+    let cur: ts.Node | undefined = node.parent;
+    while (cur && cur !== fn) {
+      if (ts.isVariableDeclaration(cur)) return true;
+      if (ts.isSourceFile(cur)) return false;
+      cur = cur.parent;
+    }
+    return false;
+  }
+
+  // walk the component body
+  function visit(node: ts.Node) {
+    if (ts.isJsxSpreadAttribute(node)) forwardSpread(node);
+    if (ts.isIdentifier(node)) recordStateReference(node);
     ts.forEachChild(node, visit);
   }
   if (fn.body) {
+    growTrackedBindings(fn.body, current.getter, current.setter, checker);
     visit(fn.body);
   }
+}
+
+// Does `node`'s subtree reference any tracked getter/setter? It `reads` when it
+// references a tracked getter and `forwardsSetter` when it references a tracked
+// setter. Shared by the carrier fixpoint (classifying a binding's initializer)
+// and the custom-hook analyzer (classifying a return slot).
+function referencesTrackedState(
+  node: ts.Node,
+  getter: Set<ts.Symbol>,
+  setter: Set<ts.Symbol>,
+  checker: ts.TypeChecker,
+): { reads: boolean; forwardsSetter: boolean } {
+  let reads = false;
+  let forwardsSetter = false;
+  (function walk(n: ts.Node) {
+    if (ts.isIdentifier(n)) {
+      const symbol = checker.getSymbolAtLocation(n);
+      if (symbol) {
+        if (getter.has(symbol)) reads = true;
+        if (setter.has(symbol)) forwardsSetter = true;
+      }
+    }
+    ts.forEachChild(n, walk);
+  })(node);
+  return { reads, forwardsSetter };
+}
+
+// A local binding that closes over tracked state becomes a carrier of it:
+//   const doubled  = c * 2                      → reads a getter   → tracked getter
+//   const onChange = useCallback(() => setV(x)) → forwards a setter → tracked setter
+// Folding such bindings into the getter/setter sets lets the ordinary forwarding
+// walk carry them onward (`<Child n={doubled} />`, `<Child onChange={onChange} />`)
+// with no special-casing at the use site — and lets the hook analyzer resolve
+// returned actions (`const toggle = () => setOn(...)`) the same way. We iterate to
+// a fixpoint so a binding derived from another resolves regardless of declaration
+// order; each round adds at least one symbol or we stop, so it terminates in at
+// most (number of local bindings) rounds.
+function growTrackedBindings(
+  body: ts.Node,
+  getter: Set<ts.Symbol>,
+  setter: Set<ts.Symbol>,
+  checker: ts.TypeChecker,
+): void {
+  const bindings: Array<{ symbol: ts.Symbol; initializer: ts.Expression }> = [];
+  (function collect(node: ts.Node) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const symbol = checker.getSymbolAtLocation(node.name);
+      if (symbol) bindings.push({ symbol, initializer: node.initializer });
+    }
+    ts.forEachChild(node, collect);
+  })(body);
+
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const { symbol, initializer } of bindings) {
+      const { reads, forwardsSetter } = referencesTrackedState(
+        initializer,
+        getter,
+        setter,
+        checker,
+      );
+      if (reads && !getter.has(symbol)) {
+        getter.add(symbol);
+        grew = true;
+      }
+      if (forwardsSetter && !setter.has(symbol)) {
+        setter.add(symbol);
+        grew = true;
+      }
+    }
+  }
+}
+
+// ── Custom hooks that own state ──────────────────────────────────────────────
+// A custom-hook call is a useState at the call site: the *calling* component owns
+// the state instance, so it becomes the root. The roles of the destructured
+// bindings come from how the hook's return expression reads or forwards its own
+// internal state — traced through the body, never inferred from `setX` naming
+// (real hooks expose `increment`, `toggle`, `reset`, …).
+
+type SlotRole = "getter" | "setter";
+
+type HookFn = ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression;
+
+// What a hook returns, expressed so a call site can destructure against it: a
+// tuple matched by index, or an object matched by property name. Slots that carry
+// no state role are left undefined (tuple) or omitted (object).
+type HookStateShape =
+  | { kind: "tuple"; slots: Array<SlotRole | undefined> }
+  | { kind: "object"; props: Map<string, SlotRole> };
+
+// React requires hook names to be `use` + a capital; matching the convention
+// avoids resolving and analyzing every call in the file.
+function isHookCalleeName(name: string): boolean {
+  return /^use[A-Z]/.test(name);
+}
+
+function calleeName(call: ts.CallExpression): string | undefined {
+  const callee = call.expression;
+  if (ts.isIdentifier(callee)) return callee.text;
+  if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+  return undefined;
+}
+
+// Resolve the function a call targets, reading through an import alias and a
+// `const useX = () => {…}` binding.
+function resolveCalleeFunction(
+  call: ts.CallExpression,
+  checker: ts.TypeChecker,
+): HookFn | undefined {
+  const callee = call.expression;
+  const ref = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
+  if (!ts.isIdentifier(ref)) return undefined;
+  let sym = checker.getSymbolAtLocation(ref);
+  if (!sym) return undefined;
+  if (sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+  const decl = sym.valueDeclaration ?? sym.declarations?.[0];
+  if (!decl) return undefined;
+  if (ts.isFunctionDeclaration(decl)) return decl;
+  if (ts.isVariableDeclaration(decl) && decl.initializer) {
+    const init = decl.initializer;
+    if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return init;
+  }
+  return undefined;
+}
+
+// The hook's top-level returned expression: a concise arrow body, or the first
+// `return` statement that isn't nested inside another function.
+function hookReturnExpression(fn: HookFn): ts.Expression | undefined {
+  const body = fn.body;
+  if (!body) return undefined;
+  if (!ts.isBlock(body)) return body;
+  let result: ts.Expression | undefined;
+  (function scan(node: ts.Node) {
+    if (result) return;
+    if (
+      node !== fn &&
+      (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node))
+    ) {
+      return; // a nested function's return isn't the hook's
+    }
+    if (ts.isReturnStatement(node)) {
+      result = node.expression;
+      return;
+    }
+    ts.forEachChild(node, scan);
+  })(body);
+  return result;
+}
+
+// The internal getter/setter symbols a hook owns through its own useState /
+// useReducer bindings (`const [on, setOn] = useState(false)`).
+function collectHookInternalState(
+  body: ts.Node,
+  hookNames: Set<string>,
+  checker: ts.TypeChecker,
+): { getter: Set<ts.Symbol>; setter: Set<ts.Symbol> } {
+  const getter = new Set<ts.Symbol>();
+  const setter = new Set<ts.Symbol>();
+  (function collect(node: ts.Node) {
+    if (
+      ts.isCallExpression(node) &&
+      isStateHookCall(node, hookNames) &&
+      ts.isVariableDeclaration(node.parent) &&
+      ts.isArrayBindingPattern(node.parent.name)
+    ) {
+      const [value, setterBinding] = node.parent.name.elements;
+      addBindingSymbol(value, getter, checker);
+      addBindingSymbol(setterBinding, setter, checker);
+    }
+    ts.forEachChild(node, collect);
+  })(body);
+  return { getter, setter };
+}
+
+function addBindingSymbol(
+  el: ts.ArrayBindingElement | undefined,
+  into: Set<ts.Symbol>,
+  checker: ts.TypeChecker,
+): void {
+  if (el && ts.isBindingElement(el) && ts.isIdentifier(el.name)) {
+    const sym = checker.getSymbolAtLocation(el.name);
+    if (sym) into.add(sym);
+  }
+}
+
+// A returned expression carries the setter if it forwards one (a wrapping action
+// like `() => setCount(c => c + 1)`), otherwise the getter if it reads state;
+// anything else holds no state role.
+function slotRole(
+  expr: ts.Expression,
+  getter: Set<ts.Symbol>,
+  setter: Set<ts.Symbol>,
+  checker: ts.TypeChecker,
+): SlotRole | undefined {
+  const { reads, forwardsSetter } = referencesTrackedState(expr, getter, setter, checker);
+  if (forwardsSetter) return "setter";
+  if (reads) return "getter";
+  return undefined;
+}
+
+function symbolRole(
+  sym: ts.Symbol,
+  getter: Set<ts.Symbol>,
+  setter: Set<ts.Symbol>,
+): SlotRole | undefined {
+  if (setter.has(sym)) return "setter";
+  if (getter.has(sym)) return "getter";
+  return undefined;
+}
+
+function objectSlotRole(
+  prop: ts.ObjectLiteralElementLike,
+  getter: Set<ts.Symbol>,
+  setter: Set<ts.Symbol>,
+  checker: ts.TypeChecker,
+): { name: string; role: SlotRole } | undefined {
+  // { value }  → shorthand: getSymbolAtLocation here returns the object's own
+  // property symbol, so resolve the value it stands for explicitly.
+  if (ts.isShorthandPropertyAssignment(prop)) {
+    const valueSym = checker.getShorthandAssignmentValueSymbol(prop);
+    const role = valueSym ? symbolRole(valueSym, getter, setter) : undefined;
+    return role ? { name: prop.name.text, role } : undefined;
+  }
+  // { increment: () => setCount(...) }
+  if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+    const role = slotRole(prop.initializer, getter, setter, checker);
+    return role ? { name: prop.name.text, role } : undefined;
+  }
+  return undefined;
+}
+
+// Classify the hook's return expression into a destructurable shape, given the
+// hook's own (internal) getter/setter symbols.
+function classifyHookReturn(
+  expr: ts.Expression,
+  getter: Set<ts.Symbol>,
+  setter: Set<ts.Symbol>,
+  hookNames: Set<string>,
+  checker: ts.TypeChecker,
+): HookStateShape | undefined {
+  // return useState(...) / useReducer(...) → the [value, setter] tuple verbatim
+  if (ts.isCallExpression(expr) && isStateHookCall(expr, hookNames)) {
+    return { kind: "tuple", slots: ["getter", "setter"] };
+  }
+  // return [value, action, …]
+  if (ts.isArrayLiteralExpression(expr)) {
+    return {
+      kind: "tuple",
+      slots: expr.elements.map((el) => slotRole(el, getter, setter, checker)),
+    };
+  }
+  // return { value, increment, … }
+  if (ts.isObjectLiteralExpression(expr)) {
+    const props = new Map<string, SlotRole>();
+    for (const prop of expr.properties) {
+      const named = objectSlotRole(prop, getter, setter, checker);
+      if (named) props.set(named.name, named.role);
+    }
+    if (props.size > 0) return { kind: "object", props };
+  }
+  return undefined;
+}
+
+// Analyze a custom hook into the shape its return value exposes to callers, or
+// undefined if it isn't backed by useState/useReducer (a context/store hook, or
+// not a state hook at all) or returns nothing we can destructure.
+function analyzeHookStateShape(fn: HookFn, checker: ts.TypeChecker): HookStateShape | undefined {
+  const body = fn.body;
+  if (!body) return undefined;
+  const hookNames = collectStateHookNames(fn.getSourceFile());
+  const { getter, setter } = collectHookInternalState(body, hookNames, checker);
+  // grow carriers (`const toggle = () => setOn(...)`) so returned actions resolve
+  growTrackedBindings(body, getter, setter, checker);
+  const ret = hookReturnExpression(fn);
+  if (!ret) return undefined;
+  return classifyHookReturn(ret, getter, setter, hookNames, checker);
+}
+
+// Map a call-site destructure (`const [open, toggle] = …` / `const { count } = …`)
+// onto a hook's return shape, collecting each bound symbol into getter or setter.
+function bindHookSlots(
+  bindingName: ts.BindingName,
+  shape: HookStateShape,
+  getter: Set<ts.Symbol>,
+  setter: Set<ts.Symbol>,
+  checker: ts.TypeChecker,
+): void {
+  if (shape.kind === "tuple" && ts.isArrayBindingPattern(bindingName)) {
+    bindingName.elements.forEach((el, i) => {
+      if (ts.isBindingElement(el) && ts.isIdentifier(el.name)) {
+        addRoleSymbol(el.name, shape.slots[i], getter, setter, checker);
+      }
+    });
+    return;
+  }
+  if (shape.kind === "object" && ts.isObjectBindingPattern(bindingName)) {
+    for (const el of bindingName.elements) {
+      // propertyName is set only when renamed: { setValue: setEmail }
+      const key = el.propertyName ?? el.name;
+      if (ts.isIdentifier(key) && ts.isIdentifier(el.name)) {
+        addRoleSymbol(el.name, shape.props.get(key.text), getter, setter, checker);
+      }
+    }
+  }
+}
+
+function addRoleSymbol(
+  name: ts.Identifier,
+  role: SlotRole | undefined,
+  getter: Set<ts.Symbol>,
+  setter: Set<ts.Symbol>,
+  checker: ts.TypeChecker,
+): void {
+  if (!role) return;
+  const sym = checker.getSymbolAtLocation(name);
+  if (!sym) return;
+  if (role === "getter") getter.add(sym);
+  else setter.add(sym);
+}
+
+// A JSX spread (`{...expr}`) forwards an object's props. Resolve it to the
+// object literal it carries when that's statically knowable: an inline
+// `{...{ count }}` or an identifier bound to one (`const props = { count }`).
+function resolveSpreadObject(
+  expr: ts.Expression,
+  checker: ts.TypeChecker,
+): ts.ObjectLiteralExpression | undefined {
+  if (ts.isObjectLiteralExpression(expr)) return expr;
+  if (ts.isIdentifier(expr)) {
+    const decl = checker.getSymbolAtLocation(expr)?.valueDeclaration;
+    if (
+      decl &&
+      ts.isVariableDeclaration(decl) &&
+      decl.initializer &&
+      ts.isObjectLiteralExpression(decl.initializer)
+    ) {
+      return decl.initializer;
+    }
+  }
+  return undefined;
+}
+
+function spreadPropEntry(
+  prop: ts.ObjectLiteralElementLike,
+  checker: ts.TypeChecker,
+): { keyName: string; valueSymbol: ts.Symbol } | undefined {
+  if (ts.isShorthandPropertyAssignment(prop)) {
+    const valueSymbol = checker.getShorthandAssignmentValueSymbol(prop);
+    if (valueSymbol) return { keyName: prop.name.text, valueSymbol };
+  }
+  return undefined;
 }
 
 function resolveComponentFn(
@@ -325,10 +826,24 @@ function resolveComponentFn(
   if (ts.isFunctionDeclaration(decl) || ts.isArrowFunction(decl) || ts.isFunctionExpression(decl)) {
     return decl;
   }
-  // const Child = () => {...}  or  const Child = function () {...}
+  // const Child = () => {...} / function () {...} / memo(() => {...}) /
+  // forwardRef((p, ref) => {...}) / memo(forwardRef(...))
   if (ts.isVariableDeclaration(decl) && decl.initializer) {
-    const init = decl.initializer;
-    if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) return init;
+    return unwrapComponentFn(decl.initializer);
+  }
+  return undefined;
+}
+
+// Peel HOC call wrappers off an initializer to find the underlying component
+// function. `memo(() => {...})` and `forwardRef((p, ref) => {...})` both pass
+// the render function as an argument, so recurse into call arguments.
+function unwrapComponentFn(expr: ts.Expression): ComponentFn | undefined {
+  if (ts.isArrowFunction(expr) || ts.isFunctionExpression(expr)) return expr;
+  if (ts.isCallExpression(expr)) {
+    for (const arg of expr.arguments) {
+      const found = unwrapComponentFn(arg);
+      if (found) return found;
+    }
   }
   return undefined;
 }
@@ -342,20 +857,34 @@ function getEnclosingComponentFunction(node: ts.Node): ComponentFn | undefined {
   return undefined;
 }
 
-function getEnclosingJsxAttribute(node: ts.Node): ts.JsxAttribute | undefined {
-  let current: ts.Node | undefined = node.parent;
+// A handler prop carries state across a component boundary:
+// `<Child onSave={() => setBio(x)} />`. The matched identifier (`setBio`) sits
+// inside a function expression that is the *value* of a JSX attribute; climbing
+// out of that function lands on the attribute. Returns that attribute, so the
+// handler can be forwarded like a renamed getter/setter.
+//
+// Returns undefined for shapes that must NOT forward: a non-function attribute
+// value (`label={count + 1}` — a detached derived value the child never sees as
+// state), a render-prop child (`<Wrap>{(x) => ...}</Wrap>` — not an attribute),
+// and references that never reach a JSX attribute (effects, local calls).
+function enclosingHandlerAttribute(node: ts.Node): ts.JsxAttribute | undefined {
+  let cur: ts.Node | undefined = node.parent;
+  let crossedFunction: ts.ArrowFunction | ts.FunctionExpression | undefined;
 
-  while (current) {
-    if (ts.isJsxAttribute(current)) return current;
-    if (
-      ts.isJsxElement(current) ||
-      ts.isJsxFragment(current) ||
-      // did we walk all the way up
-      ts.isSourceFile(current)
-    ) {
+  while (cur) {
+    if (ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) {
+      // outermost function below the JSX expression wins (we climb inside-out)
+      crossedFunction = cur;
+    } else if (ts.isJsxExpression(cur)) {
+      // the function we crossed must itself be the attribute's value
+      if (crossedFunction && cur.expression === crossedFunction && ts.isJsxAttribute(cur.parent)) {
+        return cur.parent;
+      }
+      return undefined;
+    } else if (ts.isJsxElement(cur) || ts.isJsxFragment(cur) || ts.isSourceFile(cur)) {
       return undefined;
     }
-    current = current.parent;
+    cur = cur.parent;
   }
 
   return undefined;
@@ -365,45 +894,11 @@ function isPascalCase(name: string): boolean {
   return /^[A-Z]/.test(name);
 }
 
-function getFunctionOwnerSymbol(
-  fn: ts.SignatureDeclaration,
-  checker: ts.TypeChecker,
-): ts.Symbol | undefined {
-  // outer binding (what JSX consumers see) wins, so the symbol matches
-  // whatever <App /> resolves to downstream
-  if (
-    (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
-    ts.isVariableDeclaration(fn.parent) &&
-    ts.isIdentifier(fn.parent.name)
-  ) {
-    return checker.getSymbolAtLocation(fn.parent.name);
-  }
-  if (ts.isFunctionDeclaration(fn) && fn.name) {
-    return checker.getSymbolAtLocation(fn.name);
-  }
-  // named function expression with no outer binding (rare)
-  if (ts.isFunctionExpression(fn) && fn.name) {
-    return checker.getSymbolAtLocation(fn.name);
-  }
-  return undefined;
-}
-
-function nodeAttachedToJsxElement(node: ts.Node) {
-  let current = node;
-
-  while (current) {
-    if (ts.isJsxSelfClosingElement(current)) {
-      return current;
-    }
-
-    if (ts.isJsxOpeningElement(current)) {
-      return current;
-    }
-
-    current = current.parent;
-  }
-
-  return false;
+// The symbol `<App />` consumers resolve to — read off the same identifier
+// that names the component, so name and owner symbol always agree.
+function getFunctionOwnerSymbol(fn: ComponentFn, checker: ts.TypeChecker): ts.Symbol | undefined {
+  const id = maybeComponentNameIdentifier(fn);
+  return id ? checker.getSymbolAtLocation(id) : undefined;
 }
 
 function matchPropBinding(
@@ -434,7 +929,7 @@ function matchPropBinding(
   return undefined;
 }
 
-export function retrieveLeastCommonAncestorFromRoot(root: DrillerRoot): DrillerRoot | DrillerNode {
+export function retrieveClosestCommonParentFromRoot(root: DrillerRoot): DrillerRoot | DrillerNode {
   if (hasGetOrSet(root.usage)) {
     return root;
   }

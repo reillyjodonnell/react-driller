@@ -63,10 +63,10 @@ describe("renderJson", () => {
     expect(summary.drillingFindings as number).toBeGreaterThanOrEqual(1);
   });
 
-  it("marks a drilled state with a ThemeToggle suggested ancestor", () => {
+  it("marks a drilled state with a ThemeToggle suggested parent", () => {
     const drilled = collectStates(parsed).find((state) => state.drilled === true);
     expect(drilled).toBeDefined();
-    const suggested = asRecord(drilled!.suggestedAncestor);
+    const suggested = asRecord(drilled!.suggestedParent);
     expect(suggested.name).toBe("ThemeToggle");
   });
 
@@ -89,8 +89,8 @@ describe("renderJson", () => {
         for (const stateValue of asArray(component.states)) {
           const state = asRecord(stateValue);
           assertLocationRepoRelative(state.location);
-          if (state.suggestedAncestor !== undefined) {
-            const suggested = asRecord(state.suggestedAncestor);
+          if (state.suggestedParent !== undefined) {
+            const suggested = asRecord(state.suggestedParent);
             assertLocationRepoRelative(suggested.location);
           }
         }
@@ -100,7 +100,7 @@ describe("renderJson", () => {
 
   type ParsedState = {
     drilled: boolean;
-    suggestedAncestor?: unknown;
+    suggestedParent?: unknown;
   };
 
   function collectStates(value: unknown): ParsedState[] {
@@ -115,7 +115,7 @@ describe("renderJson", () => {
           expect(typeof state.drilled).toBe("boolean");
           states.push({
             drilled: state.drilled as boolean,
-            suggestedAncestor: state.suggestedAncestor,
+            suggestedParent: state.suggestedParent,
           });
         }
       }

@@ -12,18 +12,18 @@ Each path may be a file or a directory. Directories are walked recursively for `
 
 ### Flags
 
-| Flag | Description |
-| --- | --- |
-| `-h`, `--help` | Show help. |
-| `-v`, `--version` | Print version. |
-| `--json` | Emit machine-readable output: exactly one JSON object on stdout and nothing else (no colors, no extra logs). |
-| `--fail-on <level>` | Set the exit code based on findings. See levels below. |
-| `--diff` | Scan only files that git reports as changed versus the base ref. |
-| `--diff-base <ref>` | Base ref for `--diff` (default `main`). Requires `--diff`. |
+| Flag                | Description                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `-h`, `--help`      | Show help.                                                                                                   |
+| `-v`, `--version`   | Print version.                                                                                               |
+| `--json`            | Emit machine-readable output: exactly one JSON object on stdout and nothing else (no colors, no extra logs). |
+| `--fail-on <level>` | Set the exit code based on findings. See levels below.                                                       |
+| `--diff`            | Scan only files that git reports as changed versus the base ref.                                             |
+| `--diff-base <ref>` | Base ref for `--diff` (default `main`). Requires `--diff`.                                                   |
 
 #### `--json`
 
-Prints a single JSON object describing every scanned file, its components, and each piece of `useState` it owns. Each state reports whether it is `drilled` and, when it is, the `suggestedAncestor` where it should live. A top-level `summary` carries the aggregate counts.
+Prints a single JSON object describing every scanned file, its components, and each piece of `useState` it owns. Each state reports whether it is `drilled` and, when it is, the `suggestedParent` where it should live. A top-level `summary` carries the aggregate counts.
 
 ```
 $ react-driller --json src/App.tsx
@@ -43,7 +43,7 @@ $ react-driller --json src/App.tsx
               "name": "theme",
               "location": { "file": "src/App.tsx", "line": 2, "column": 30 },
               "drilled": true,
-              "suggestedAncestor": {
+              "suggestedParent": {
                 "name": "ThemeToggle",
                 "location": { "file": "src/App.tsx", "line": 11, "column": 1 }
               }
@@ -63,10 +63,10 @@ All `file` fields (top-level and inside every `location`) are repo-relative, nev
 
 Controls the process exit code so react-driller can gate a commit or CI run.
 
-| Level | Behavior |
-| --- | --- |
-| `none` (default) | Always exit `0`. Preserves the default behavior. |
-| `findings` | Exit `1` when there is at least one drilling finding (a `useState` whose least-common-ancestor differs from the component that declares it); otherwise exit `0`. |
+| Level            | Behavior                                                                                                                                                         |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `none` (default) | Always exit `0`. Preserves the default behavior.                                                                                                                 |
+| `findings`       | Exit `1` when there is at least one drilling finding (a `useState` whose closest common parent differs from the component that declares it); otherwise exit `0`. |
 
 An unrecognized level prints a clear error to stderr and exits `1`.
 
@@ -162,31 +162,29 @@ And your agent can fix it
 
 thanks for checking it out <3
 
-## What works today
+## Supported
 
-- `useState` roots with array destructure: `const [v, setV] = useState(...)`
-- Function components: `function Foo()`, `const Foo = () => ...`, `const Foo = function() {}` (PascalCase)
-- Cross-file traversal — follows alias symbols across imports via the TS checker
-- Read-vs-forward distinction per state value (separately for getter and setter)
-- Child prop destructure incl. renames (`{ value: v }`) and rest (`{ x, ...rest }`)
-- `children={<Inner v={v}/>}` pass-through
-- Multi-sibling least-common-ancestor suggestion
-- Multiple `useState`s per component, multiple roots per file
-- Directory walking for `.tsx`/`.jsx` (ignores `node_modules`, `dist`, `.next`, …)
+Does react-driller understand your code? ✅ yes · 🚧 not yet · — out of scope
 
-## What isn't yet supported
+| What you write                                                            | Status |
+| ------------------------------------------------------------------------- | :----: |
+| **State**                                                                 |        |
+| `useState`, `useReducer`                                                  |   ✅   |
+| Custom hooks that own state (`const [v, setV] = useToggle()`, object returns) | ✅ |
+| Context / external stores (Redux, Zustand) — these _solve_ drilling       |   —    |
+| **Components**                                                             |        |
+| `function`, arrow, and function-expression components                     |   ✅   |
+| `memo`, `forwardRef`, HOCs (`connect(...)`, `withX(...)`)                  |   ✅   |
+| **Passing state down**                                                     |        |
+| Props, including renamed and rest destructure (`{ value: v }`, `...rest`) |   ✅   |
+| Spread props (`<Child {...props} />`)                                     |   ✅   |
+| Rest-spread pass-through (`function W({ ...rest }) { return <Inner {...rest} /> }`) |   🚧   |
+| HTML attributes (`<input value={v} onChange={setV} />`)                   |   ✅   |
+| `children` composition — correctly kept local, not flagged                |   ✅   |
+| Handler props (`onChange={() => setV(v)}`, incl. `useCallback`-wrapped)   |   ✅   |
+| Derived values passed down (`const x = v * 2; <Child x={x} />`)           |   ✅   |
+| **Reach**                                                                  |        |
+| Cross-file, multiple states per component, recursive directory scan       |   ✅   |
+| Closest-common-parent suggestion + CI gating (`--fail-on`)               |   ✅   |
 
-- Non-array destructure: `const s = useState(0); s[0]`
-- Custom hooks wrapping `useState` (`const [v, setV] = useCounter()`)
-- Other state primitives: `useReducer`, `useRef`, `useContext`, `useSyncExternalStore`
-- Spread props: `<Child {...props} />`
-- `memo(...)` / `forwardRef(...)` wrapped children
-- Default exports, esp. wrapped (`export default memo(Foo)`)
-- Barrel re-exports: `export { Foo } from "./foo"`
-- Namespaced JSX: `<motion.div>`, `<Foo.Bar>`
-- HOC factory results: `const Made = makeFoo()`
-- Dynamic tag: `const Cmp = cond ? A : B; <Cmp />`
-- Class component children (`extends React.Component`)
-- Render-prop / children-as-function: `<Wrap>{(x) => <Inner v={v}/>}</Wrap>`
-- lowercase-named custom components (gated out by PascalCase rule)
-- `node_modules` components (will try to drill in)
+See [Known limitations](./LIMITATIONS.md) for everything that isn't handled yet (class components, namespaced tags, …) and gotchas to be aware of.

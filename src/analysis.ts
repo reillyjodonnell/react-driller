@@ -1,6 +1,6 @@
 import path from "node:path";
 import type ts from "typescript";
-import { retrieveLeastCommonAncestorFromRoot, scanNode, useStateExtractor } from "./analyzer";
+import { retrieveClosestCommonParentFromRoot, scanNode, useStateExtractor } from "./analyzer";
 import type { DrillerNode, DrillerRoot } from "./node";
 import { generateSetup } from "./setup";
 
@@ -14,7 +14,7 @@ export type StateAnalysis = {
   name: string;
   location: Location;
   drilled: boolean;
-  suggestedAncestor?: {
+  suggestedParent?: {
     name: string;
     location: Location;
   };
@@ -85,8 +85,8 @@ export function analyzeFiles(filePaths: string[]): AnalysisResult {
     for (const root of roots) {
       statesFound += 1;
 
-      const lca = retrieveLeastCommonAncestorFromRoot(root);
-      const drilled = lca !== root;
+      const commonParent = retrieveClosestCommonParentFromRoot(root);
+      const drilled = commonParent !== root;
       if (drilled) drillingFindings += 1;
 
       const state: StateAnalysis = {
@@ -95,9 +95,9 @@ export function analyzeFiles(filePaths: string[]): AnalysisResult {
         drilled,
         ...(drilled
           ? {
-              suggestedAncestor: {
-                name: lca.name,
-                location: toRepoRelative(lca.source),
+              suggestedParent: {
+                name: commonParent.name,
+                location: toRepoRelative(commonParent.source),
               },
             }
           : {}),
