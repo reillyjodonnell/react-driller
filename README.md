@@ -181,8 +181,8 @@ Does react-driller understand your code? ✅ yes · 🚧 not yet · — out of s
 | Rest-spread pass-through (`function W({ ...rest }) { return <Inner {...rest} /> }`) |   🚧   |
 | HTML attributes (`<input value={v} onChange={setV} />`)                   |   ✅   |
 | `children` composition — correctly kept local, not flagged                |   ✅   |
-| Handler props (`onChange={() => setV(v)}`)                                |   🚧   |
-| Derived values passed down (`const x = v * 2; <Child x={x} />`)           |   🚧   |
+| Handler props (`onChange={() => setV(v)}`, incl. `useCallback`-wrapped)   |   ✅   |
+| Derived values passed down (`const x = v * 2; <Child x={x} />`)           |   ✅   |
 | **Reach**                                                                  |        |
 | Cross-file, multiple states per component, recursive directory scan       |   ✅   |
 | Closest-common-parent suggestion + CI gating (`--fail-on`)               |   ✅   |

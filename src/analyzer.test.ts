@@ -1020,6 +1020,47 @@ describe("scanNode — how state flows", () => {
       expect(root.usage).toBe(Usage.ForwardsSetter);
       expect(root.children[0]?.name).toBe("Field");
     });
+
+    // One indirection further than the inline form: the handler is memoized in a
+    // local (`const onChange = useCallback(() => setV(x), [])`) and only then
+    // passed down. The binding carries the setter, so the forward — and the Sets
+    // at the descendant that invokes it — match the inline-handler case exactly.
+    it("forwards a setter wrapped in useCallback into the child", () => {
+      const root = analyzeRoot(`
+      function App() {
+        const [v, setV] = useState("");
+        const onChange = useCallback((x) => setV(x), []);
+        return <Field onChange={onChange} />;
+      }
+      function Field({ onChange }) {
+        return <input onChange={(e) => onChange(e.target.value)} />;
+      }
+    `);
+      expect(root.usage).toBe(Usage.ForwardsSetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Field");
+      expect(root.children[0]?.usage).toBe(Usage.Sets);
+    });
+  });
+
+  // A value computed from state (`const doubled = c * 2`) is itself a carrier of
+  // that state: forwarding it drills the source state into the child, keyed by the
+  // prop the child receives.
+  describe("derived values (computed from state) forwarded to a child", () => {
+    it("follows a value derived from state forwarded to a child", () => {
+      const root = analyzeRoot(`
+      function App() {
+        const [c, setC] = useState(0);
+        const doubled = c * 2;
+        return <View n={doubled} />;
+      }
+      function View({ n }) { return <span>{n}</span>; }
+    `);
+      expect(root.usage).toBe(Usage.ForwardsGetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("View");
+      expect(root.children[0]?.usage).toBe(Usage.Gets);
+    });
   });
 });
 
@@ -1292,37 +1333,114 @@ describe("retrieveClosestCommonParentFromRoot — where to lift state up", () =>
  * └────────────────────────────────────────────────────────────────────────────┘
  */
 describe("0.2.0 production-readiness gaps (it.failing — green until fixed)", () => {
-  // GAP: same shape, one indirection further — the setter is wrapped in
-  // useCallback and the resulting handler is drilled. The setter is read locally
-  // inside the callback and the forwarded symbol isn't tied back to the state.
-  it.failing("forwards a setter wrapped in useCallback into the child", () => {
-    const root = analyzeRoot(`
-      function App() {
-        const [v, setV] = useState("");
-        const onChange = useCallback((x) => setV(x), []);
-        return <Field onChange={onChange} />;
-      }
-      function Field({ onChange }) {
-        return <input onChange={(e) => onChange(e.target.value)} />;
-      }
-    `);
-    expect(root.children.length).toBe(1);
-    expect(root.children[0]?.name).toBe("Field");
-  });
+  // GAP: custom hooks that own state. A hook call is a `useState` at the call
+  // site — the *calling* component owns the instance — so the root is the caller
+  // and the destructured bindings take their getter/setter roles from how the
+  // hook's return expression reads/forwards its internal state. Roles are traced
+  // through the hook body, not inferred from `setX` naming (real hooks expose
+  // `increment`, `toggle`, `reset`, …). Today the internal `useState` is skipped
+  // for lack of a PascalCase owner, so no root is produced at all.
+  describe("custom hooks that own state", () => {
+    // 1. Tuple return — the useState mirror. `toggle` is a useCallback carrier of
+    // the internal setter; slot 0 reads the value, slot 1 forwards the setter.
+    it.failing("drills a tuple-returning hook (useToggle) into the child", () => {
+      const root = analyzeRoot(`
+        function useToggle(init = false) {
+          const [on, setOn] = useState(init);
+          const toggle = useCallback(() => setOn((o) => !o), []);
+          return [on, toggle];
+        }
+        function App() {
+          const [open, toggleOpen] = useToggle();
+          return <Panel open={open} onToggle={toggleOpen} />;
+        }
+        function Panel({ open, onToggle }) {
+          return <button onClick={onToggle}>{open ? "on" : "off"}</button>;
+        }
+      `);
+      expect(root.name).toBe("App");
+      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Panel");
+      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
+    });
 
-  // GAP: a value derived from state (`const doubled = c * 2`) and passed down is
-  // read as a plain Gets; the derived symbol that's forwarded isn't tied back to
-  // the source state, so the drill of `c` (via `doubled`) into View is missed.
-  it.failing("follows a value derived from state forwarded to a child", () => {
-    const root = analyzeRoot(`
-      function App() {
-        const [c, setC] = useState(0);
-        const doubled = c * 2;
-        return <View n={doubled} />;
-      }
-      function View({ n }) { return <span>{n}</span>; }
-    `);
-    expect(root.children.length).toBe(1);
-    expect(root.children[0]?.name).toBe("View");
+    // 2. Object return with named actions (NOT setX) — the trace-don't-name case.
+    // `increment`/`reset` close over the internal setter, so both are setters.
+    it.failing("drills an object-returning action hook (useCounter)", () => {
+      const root = analyzeRoot(`
+        function useCounter(start = 0) {
+          const [count, setCount] = useState(start);
+          return {
+            count,
+            increment: () => setCount((c) => c + 1),
+            reset: () => setCount(0),
+          };
+        }
+        function App() {
+          const { count, increment, reset } = useCounter();
+          return <Display count={count} onInc={increment} onReset={reset} />;
+        }
+        function Display({ count, onInc, onReset }) {
+          return (
+            <div>
+              {count}
+              <button onClick={onInc}>+</button>
+              <button onClick={onReset}>0</button>
+            </div>
+          );
+        }
+      `);
+      expect(root.name).toBe("App");
+      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Display");
+      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
+    });
+
+    // 3. Renamed object destructure at the call site (`{ value: email, setValue: setEmail }`)
+    // — slots are matched by property name, then bound to the renamed locals.
+    it.failing("drills an object hook through a renamed destructure (useField)", () => {
+      const root = analyzeRoot(`
+        function useField(init) {
+          const [value, setValue] = useState(init);
+          return { value, setValue };
+        }
+        function App() {
+          const { value: email, setValue: setEmail } = useField("");
+          return <Input value={email} onChange={setEmail} />;
+        }
+        function Input({ value, onChange }) {
+          return <input value={value} onChange={(e) => onChange(e.target.value)} />;
+        }
+      `);
+      expect(root.name).toBe("App");
+      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Input");
+      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
+    });
+
+    // 4. Pass-through: the hook returns the `useState` tuple directly, so the
+    // slots inherit useState's own (value, setter) roles.
+    it.failing("drills a hook that returns the useState tuple directly (useName)", () => {
+      const root = analyzeRoot(`
+        function useName() {
+          return useState("");
+        }
+        function App() {
+          const [name, setName] = useName();
+          return <Field name={name} setName={setName} />;
+        }
+        function Field({ name, setName }) {
+          return <input value={name} onChange={(e) => setName(e.target.value)} />;
+        }
+      `);
+      expect(root.name).toBe("App");
+      expect(root.usage).toBe(Usage.ForwardsGetter | Usage.ForwardsSetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Field");
+      expect(root.children[0]?.usage).toBe(Usage.Gets | Usage.Sets);
+    });
   });
 });

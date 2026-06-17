@@ -10,11 +10,6 @@ For supported React patterns, see the table in the [README](./README.md#supporte
 
 - **Custom hooks that own state** — `const [v, setV] = useToggle()`. Only literal
   `useState` / `useReducer` are recognized as roots. This is actively being worked on.
-- **Handler props** — `<Field onChange={(x) => setV(x)} />`. The setter is read
-  inside the handler, so it's counted as a local use rather than followed into
-  the child.
-- **Derived values passed down** — `const x = v * 2; <Child x={x} />`. The derived
-  value isn't tied back to its source state, so the drill of `v` is missed.
 - **Rest-spread pass-through** — `function W({ ...rest }) { return <Inner {...rest} /> }`.
   Common in wrapper / design-system components; the forwarded `...rest` isn't
   traced onward.
