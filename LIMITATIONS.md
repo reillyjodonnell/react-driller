@@ -42,6 +42,4 @@ Patterns that aren't prop drilling, or are too rare to be worth the complexity.
 
 ## Gotchas ⚠️
 
-- **`node_modules` components** — state from node*modules e.g. tanstack/query is indistringuishable from react-driller's perspective. Be wary that it **can** appear in results until remedied.
-  `node_modules`, but an \_import* from one is still followed. Keep your own
-  components in your source tree.
+- **`node_modules` components** — state from node_modules e.g. tanstack/query is indistinguishable from react-driller's perspective. Be wary that it **can** appear in results until remedied. Directory scans skip `node_modules`, but an `import` from one is still followed. Keep your own components in your source tree.

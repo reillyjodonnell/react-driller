@@ -962,6 +962,65 @@ describe("scanNode — how state flows", () => {
       expect(root?.children).toHaveLength(0);
     });
   });
+
+  // A handler prop on a *component* (`<Child onChange={(x) => setV(x)} />`) is the
+  // idiomatic alternative to drilling a raw setter: the function closes over our
+  // state and the child decides when to invoke it, so the symbol it carries is
+  // forwarded to the child (keyed by the prop name) rather than counted as a
+  // local use. The host-element form (`<button onClick={() => setV()}>`) stays a
+  // local use — see "treats setter called inside a host-element event handler".
+  describe("handler props (callbacks that carry state)", () => {
+    // Setter referenced inside an inline arrow on a component → forwarded, and
+    // marked Sets at the descendant that actually invokes the handler.
+    it("forwards a setter wrapped in a handler prop into the child", () => {
+      const root = analyzeRoot(`
+      function App() {
+        const [v, setV] = useState("");
+        return <Field onChange={(x) => setV(x)} />;
+      }
+      function Field({ onChange }) {
+        return <input onChange={(e) => onChange(e.target.value)} />;
+      }
+    `);
+      expect(root.usage).toBe(Usage.ForwardsSetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Field");
+      expect(root.children[0]?.usage).toBe(Usage.Sets);
+    });
+
+    // Getter read inside a handler is the same shape: the descendant that invokes
+    // the handler reads our state at call time, so the getter is forwarded too.
+    it("forwards a getter read inside a handler prop into the child", () => {
+      const root = analyzeRoot(`
+      function App() {
+        const [v, setV] = useState("");
+        return <Logger onLog={() => report(v)} />;
+      }
+      function Logger({ onLog }) {
+        return <button onClick={onLog}>log</button>;
+      }
+    `);
+      expect(root.usage).toBe(Usage.ForwardsGetter);
+      expect(root.children.length).toBe(1);
+      expect(root.children[0]?.name).toBe("Logger");
+    });
+
+    // The state reference can sit inside a block-bodied handler, not just an
+    // expression arrow — climbing out of the function still lands on the attribute.
+    it("forwards a setter from a block-bodied handler", () => {
+      const root = analyzeRoot(`
+      function App() {
+        const [v, setV] = useState("");
+        return <Field onChange={(x) => { setV(x); }} />;
+      }
+      function Field({ onChange }) {
+        return <input onChange={onChange} />;
+      }
+    `);
+      expect(root.usage).toBe(Usage.ForwardsSetter);
+      expect(root.children[0]?.name).toBe("Field");
+    });
+  });
 });
 
 describe("retrieveClosestCommonParentFromRoot — where to lift state up", () => {
@@ -1191,6 +1250,26 @@ describe("retrieveClosestCommonParentFromRoot — where to lift state up", () =>
     const commonParent = retrieveClosestCommonParentFromRoot(root);
     expect(commonParent.name).toBe("Field");
   });
+
+  // `bio` is forwarded to Preview (the real consumer) *and* referenced inside an
+  // `onSave` handler App passes down — App never renders bio itself. Now that the
+  // handler reference is a forward (not a local read), the early-return no longer
+  // fires and the drill into Preview is reported. This was the dominant
+  // false-negative on real apps: an owner referencing its own state only to build
+  // a prop/handler for a child.
+  it("lifts past a parent that only references state inside a down-passed handler", () => {
+    const root = analyzeRoot(`
+      function App() {
+        const [bio, setBio] = useState("");
+        return <Preview bio={bio} onSave={() => save(bio)} />;
+      }
+      function Preview({ bio, onSave }) {
+        return <span>{bio}</span>;
+      }
+    `);
+    const commonParent = retrieveClosestCommonParentFromRoot(root);
+    expect(commonParent.name).toBe("Preview");
+  });
 });
 
 /**
@@ -1213,23 +1292,6 @@ describe("retrieveClosestCommonParentFromRoot — where to lift state up", () =>
  * └────────────────────────────────────────────────────────────────────────────┘
  */
 describe("0.2.0 production-readiness gaps (it.failing — green until fixed)", () => {
-  // GAP: the idiomatic alternative to drilling a raw setter is a handler prop
-  // (`<Field onChange={(x) => setV(x)} />`). The setter call sits in an arrow on
-  // a JSX attribute, recorded as a local Set, so the drill into Field is missed.
-  it.failing("forwards a setter wrapped in a handler prop into the child", () => {
-    const root = analyzeRoot(`
-      function App() {
-        const [v, setV] = useState("");
-        return <Field onChange={(x) => setV(x)} />;
-      }
-      function Field({ onChange }) {
-        return <input onChange={(e) => onChange(e.target.value)} />;
-      }
-    `);
-    expect(root.children.length).toBe(1);
-    expect(root.children[0]?.name).toBe("Field");
-  });
-
   // GAP: same shape, one indirection further — the setter is wrapped in
   // useCallback and the resulting handler is drilled. The setter is read locally
   // inside the callback and the forwarded symbol isn't tied back to the state.
@@ -1263,26 +1325,4 @@ describe("0.2.0 production-readiness gaps (it.failing — green until fixed)", (
     expect(root.children.length).toBe(1);
     expect(root.children[0]?.name).toBe("View");
   });
-
-  // GAP: `bio` is forwarded to Preview (the real consumer) *and* referenced in an
-  // `onSave` handler App passes down — App never renders bio itself. The handler
-  // reference is recorded as a local Gets, and the early-return in
-  // retrieveClosestCommonParentFromRoot treats any local get/set as "lives here",
-  // suppressing the real drill. This is the dominant false-negative on real apps,
-  // where an owner usually references its own state while passing it down.
-  it.failing(
-    "does not treat a reference inside a down-passed callback as local consumption",
-    () => {
-      const root = analyzeRoot(`
-      function App() {
-        const [bio, setBio] = useState("");
-        return <Preview bio={bio} onSave={() => save(bio)} />;
-      }
-      function Preview({ bio, onSave }) {
-        return <span>{bio}</span>;
-      }
-    `);
-      expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Preview");
-    },
-  );
 });
