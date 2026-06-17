@@ -434,13 +434,24 @@ export function scanNode(
     );
   }
 
-  // Is this reference nested inside a local binding's initializer (rather than in
-  // render output, an effect, or a bare statement)? If so the enclosing binding is
-  // a tracked carrier (see growTrackedBindings) and owns the forwarding.
+  // Is this reference nested inside the initializer of a binding we actually
+  // tracked as a carrier (see growTrackedBindings)? If so that binding owns the
+  // forwarding and this isn't a local use. Only *identifier*-named bindings whose
+  // symbol made it into the getter/setter set qualify — a destructure or an opaque
+  // call result (`const { out } = prepare(sel)`) does NOT carry the state, so a
+  // reference inside it is a genuine local read.
   function withinLocalBinding(node: ts.Node): boolean {
     let cur: ts.Node | undefined = node.parent;
     while (cur && cur !== fn) {
-      if (ts.isVariableDeclaration(cur)) return true;
+      if (ts.isVariableDeclaration(cur)) {
+        if (ts.isIdentifier(cur.name)) {
+          const sym = checker.getSymbolAtLocation(cur.name);
+          if (sym && (current.getter.has(sym) || current.setter.has(sym))) {
+            return true;
+          }
+        }
+        return false;
+      }
       if (ts.isSourceFile(cur)) return false;
       cur = cur.parent;
     }
@@ -957,4 +968,54 @@ export function retrieveClosestCommonParentFromRoot(root: DrillerRoot): DrillerR
   if (match) return match;
 
   return root;
+}
+
+// Count how many times each component is instantiated as JSX across the given
+// files, and return the set rendered in more than one place. Such a component is
+// never a valid lift target: moving a useState into its definition would fork the
+// state across every render site (and sever the owner that drives it). Host tags
+// (lowercase) are skipped — only resolvable components count.
+export function collectSharedComponents(
+  sourceFiles: ts.SourceFile[],
+  checker: ts.TypeChecker,
+): Set<ts.Symbol> {
+  const counts = new Map<ts.Symbol, number>();
+  for (const sourceFile of sourceFiles) {
+    (function walk(node: ts.Node) {
+      if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+        const tag = node.tagName;
+        // skip lowercase host elements; resolve component tags to their symbol
+        if (!ts.isIdentifier(tag) || isPascalCase(tag.text)) {
+          const fn = resolveComponentFn(tag, checker);
+          const sym = fn ? getFunctionOwnerSymbol(fn, checker) : undefined;
+          if (sym) counts.set(sym, (counts.get(sym) ?? 0) + 1);
+        }
+      }
+      ts.forEachChild(node, walk);
+    })(sourceFile);
+  }
+
+  const shared = new Set<ts.Symbol>();
+  for (const [sym, n] of counts) {
+    if (n > 1) shared.add(sym);
+  }
+  return shared;
+}
+
+// The closest *valid* lift target: the common parent of the state's uses, walked
+// up past any shared component (see collectSharedComponents) to the nearest
+// ancestor we could actually move the state into. If every candidate up to the
+// owner is shared, the state stays where it is (returns the root → not drilled).
+export function retrieveLiftTarget(
+  root: DrillerRoot,
+  shared: Set<ts.Symbol>,
+  checker: ts.TypeChecker,
+): DrillerRoot | DrillerNode {
+  let target: DrillerRoot | DrillerNode = retrieveClosestCommonParentFromRoot(root);
+  while (target !== root) {
+    const sym = getFunctionOwnerSymbol(target.ownerComponentFunction, checker);
+    if (!sym || !shared.has(sym)) break;
+    target = target.parent ?? root;
+  }
+  return target;
 }

@@ -29,7 +29,7 @@
   ],
   "type": "module",
   "scripts": {
-    "test": "bun test",
+    "test": "bun test ./src",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",
     "format": "oxfmt",

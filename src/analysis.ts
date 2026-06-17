@@ -1,6 +1,11 @@
 import path from "node:path";
 import type ts from "typescript";
-import { retrieveClosestCommonParentFromRoot, scanNode, useStateExtractor } from "./analyzer";
+import {
+  collectSharedComponents,
+  retrieveLiftTarget,
+  scanNode,
+  useStateExtractor,
+} from "./analyzer";
 import type { DrillerNode, DrillerRoot } from "./node";
 import { generateSetup } from "./setup";
 
@@ -66,6 +71,10 @@ function walkTree(root: DrillerRoot, checker: ts.TypeChecker) {
 export function analyzeFiles(filePaths: string[]): AnalysisResult {
   const { checker, sourceFiles } = generateSetup({ filePaths });
 
+  // Components rendered in more than one place are never valid lift targets, so
+  // compute this once over the whole scanned set before resolving any finding.
+  const sharedComponents = collectSharedComponents([...sourceFiles.values()], checker);
+
   const files: FileAnalysis[] = [];
   let filesScanned = 0;
   let statesFound = 0;
@@ -85,7 +94,7 @@ export function analyzeFiles(filePaths: string[]): AnalysisResult {
     for (const root of roots) {
       statesFound += 1;
 
-      const commonParent = retrieveClosestCommonParentFromRoot(root);
+      const commonParent = retrieveLiftTarget(root, sharedComponents, checker);
       const drilled = commonParent !== root;
       if (drilled) drillingFindings += 1;
 

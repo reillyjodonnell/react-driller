@@ -1,6 +1,11 @@
 import { describe, it, expect } from "bun:test";
 import { Usage, type DrillerRoot } from "./node";
-import { analyzeRoot, analyzeRoots, extractRoots } from "./test-utils";
+import {
+  analyzeRoot,
+  analyzeRoots,
+  extractRoots,
+  liftResult,
+} from "./test-utils";
 import { retrieveClosestCommonParentFromRoot } from "./analyzer";
 
 /**
@@ -747,7 +752,9 @@ describe("scanNode — how state flows", () => {
       const child = root.children[0];
       expect(child?.children.length).toBe(1);
 
-      expect(root.children[0]?.usage).toStrictEqual(Usage.Gets | Usage.ForwardsGetter);
+      expect(root.children[0]?.usage).toStrictEqual(
+        Usage.Gets | Usage.ForwardsGetter,
+      );
       expect(child?.children[0]?.usage).toStrictEqual(Usage.Gets);
     });
 
@@ -1171,6 +1178,91 @@ describe("scanNode — how state flows", () => {
       expect(root.children[0]?.usage).toBe(Usage.Gets);
     });
   });
+
+  // The counterpoint to derived values: only an *identifier*-named binding is a
+  // tracked carrier. When state is read as an argument to an opaque call whose
+  // result is *destructured* (or otherwise not an identifier binding), that read
+  // is a genuine local use — the binding doesn't carry the state onward — so the
+  // state stays put rather than being "drilled" into a child it's also passed to.
+  describe("local reads that are not carriers stay local", () => {
+    // Regression for a real excalidraw false positive (`exportSelectionOnly` was
+    // reported as drilled into a shared <Switch/> even though it's read locally to
+    // build the export payload). `prepare(sel)` reads sel here-and-now.
+    it("treats a state read inside a destructured opaque call as a local use", () => {
+      const root = analyzeRoot(`
+      function App() {
+        const [sel, setSel] = useState(false);
+        const { out } = prepare(sel);
+        return <div>{out}<Switch checked={sel} onChange={(c) => setSel(c)} /></div>;
+      }
+      function Switch({ checked, onChange }) {
+        return <input checked={checked} onChange={onChange} />;
+      }
+    `);
+      // sel is read locally in prepare(sel) → a Get here, not solely a forward
+      expect(root.usage & Usage.Gets).toBe(Usage.Gets);
+      // …so it stays in App rather than being lifted into Switch
+      expect(retrieveClosestCommonParentFromRoot(root)).toBe(root);
+    });
+  });
+
+  // DEFERRED GAP (it.failing): a value derived from state *through a destructuring
+  // binding* is still a carrier — same as `const doubled = v * 2` — but the binding
+  // name isn't a plain identifier, the one shape growTrackedBindings skips, so the
+  // forward is missed (false negative). Tracked here; lower priority than shared
+  // components. Flip to `it` when growTrackedBindings learns destructure patterns.
+  describe("carriers through destructuring", () => {
+    it.failing(
+      "follows an object-destructured field forwarded to a child",
+      () => {
+        const root = analyzeRoot(`
+      function App() {
+        const [v, setV] = useState({ k: 1 });
+        const { k } = v;
+        return <Child k={k} />;
+      }
+      function Child({ k }) { return <span>{k}</span>; }
+    `);
+        expect(root.usage).toBe(Usage.ForwardsGetter);
+        expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Child");
+        expect(root.children[0]?.usage).toBe(Usage.Gets);
+      },
+    );
+
+    it.failing(
+      "follows a field destructured from an opaque call on state",
+      () => {
+        const root = analyzeRoot(`
+      function App() {
+        const [v, setV] = useState(0);
+        const { x } = wrap(v);
+        return <Child x={x} />;
+      }
+      function Child({ x }) { return <span>{x}</span>; }
+    `);
+        expect(root.usage).toBe(Usage.ForwardsGetter);
+        expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Child");
+        expect(root.children[0]?.usage).toBe(Usage.Gets);
+      },
+    );
+
+    it.failing(
+      "follows an array-destructured element forwarded to a child",
+      () => {
+        const root = analyzeRoot(`
+      function App() {
+        const [v, setV] = useState(0);
+        const [x] = [v];
+        return <Child x={x} />;
+      }
+      function Child({ x }) { return <span>{x}</span>; }
+    `);
+        expect(root.usage).toBe(Usage.ForwardsGetter);
+        expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Child");
+        expect(root.children[0]?.usage).toBe(Usage.Gets);
+      },
+    );
+  });
 });
 
 describe("retrieveClosestCommonParentFromRoot — where to lift state up", () => {
@@ -1422,28 +1514,54 @@ describe("retrieveClosestCommonParentFromRoot — where to lift state up", () =>
   });
 });
 
-/**
- * ┌─ 0.2.0 production-readiness gate ──────────────────────────────────────────┐
- * These tests assert the *correct* (desired) behavior for patterns real React
- * codebases use constantly but the analyzer doesn't yet handle. They are marked
- * `it.failing`, so:
- *   - while the gap exists the assertion fails → Bun reports (pass) → CI green;
- *   - the moment the gap is fixed the assertion passes → Bun reports (fail) with
- *     "marked as failing but it passed" → CI red → remove `.failing` and the
- *     test becomes a permanent regression guard.
- *
- * This block is the executable checklist for 0.2.0: **ship when it is empty.**
- * Do NOT pin current (wrong) behavior here — that belongs in a "known gaps"
- * block as a green test (e.g. Context distribution, which is the *cure* for
- * drilling and an intentional non-goal, stays pinned green above).
- *
- * When closing a gap: delete `.failing`, drop the related green "known gaps"
- * pin if it now contradicts reality, and update the README DO/DON'T lists.
- * └────────────────────────────────────────────────────────────────────────────┘
- */
-describe("0.2.0 production-readiness gaps (it.failing — green until fixed)", () => {
-  // Empty: every gap tracked here has been closed and promoted to a permanent
-  // regression guard (useCallback-wrapped handlers → "handler props"; derived
-  // values → "derived values …"; custom hooks → "custom hooks that own state").
-  // Add the next unhandled real-world pattern here as `it.failing` when one surfaces.
+// The lift target excludes shared components: you can never move a useState into a
+// component rendered in more than one place (it would fork the state across every
+// render site and sever the owner that drives it). The fix walks the common parent
+// up to the nearest singular ancestor — or, if there isn't one, leaves the state put.
+describe("lift target excludes shared components", () => {
+  // `Badge` is the sole consumer of `v`, but it's rendered in two places, so it's
+  // not a valid home. Walking up lands on the owner → not drilled. (This is the
+  // excalidraw copyStatus → FilledButton false positive, distilled.)
+  it("does not lift state into a component rendered in multiple places", () => {
+    const r = liftResult(`
+      function App() {
+        const [v, setV] = useState(0);
+        return <Badge value={v} />;
+      }
+      function Other() { return <Badge value={1} />; }
+      function Badge({ value }) { return <span>{value}</span>; }
+    `);
+    expect(r.drilled).toBe(false);
+    expect(r.target).toBe("App");
+  });
+
+  // Single-use consumer is a genuine, safe lift target — don't over-suppress.
+  // (This is the excalidraw selectedItems → LibraryMenuItems true positive.)
+  it("still lifts into a single-use consumer", () => {
+    const r = liftResult(`
+      function App() {
+        const [v, setV] = useState(0);
+        return <Panel value={v} />;
+      }
+      function Panel({ value }) { return <span>{value}</span>; }
+    `);
+    expect(r.drilled).toBe(true);
+    expect(r.target).toBe("Panel");
+  });
+
+  // Genuinely drilled through a chain to a *shared* leaf: lift to the nearest
+  // singular ancestor (Mid), not into the shared leaf (Leaf).
+  it("lifts to the nearest singular ancestor when the consumer is shared", () => {
+    const r = liftResult(`
+      function App() {
+        const [v, setV] = useState(0);
+        return <Mid value={v} />;
+      }
+      function Mid({ value }) { return <Leaf value={value} />; }
+      function Other() { return <Leaf value={1} />; }
+      function Leaf({ value }) { return <span>{value}</span>; }
+    `);
+    expect(r.drilled).toBe(true);
+    expect(r.target).toBe("Mid");
+  });
 });
