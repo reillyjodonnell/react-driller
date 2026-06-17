@@ -1,11 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { Usage, type DrillerRoot } from "./node";
-import {
-  analyzeRoot,
-  analyzeRoots,
-  extractRoots,
-  liftResult,
-} from "./test-utils";
+import { analyzeRoot, analyzeRoots, extractRoots, liftResult } from "./test-utils";
 import { retrieveClosestCommonParentFromRoot } from "./analyzer";
 
 /**
@@ -752,9 +747,7 @@ describe("scanNode — how state flows", () => {
       const child = root.children[0];
       expect(child?.children.length).toBe(1);
 
-      expect(root.children[0]?.usage).toStrictEqual(
-        Usage.Gets | Usage.ForwardsGetter,
-      );
+      expect(root.children[0]?.usage).toStrictEqual(Usage.Gets | Usage.ForwardsGetter);
       expect(child?.children[0]?.usage).toStrictEqual(Usage.Gets);
     });
 
@@ -1212,10 +1205,8 @@ describe("scanNode — how state flows", () => {
   // forward is missed (false negative). Tracked here; lower priority than shared
   // components. Flip to `it` when growTrackedBindings learns destructure patterns.
   describe("carriers through destructuring", () => {
-    it.failing(
-      "follows an object-destructured field forwarded to a child",
-      () => {
-        const root = analyzeRoot(`
+    it.failing("follows an object-destructured field forwarded to a child", () => {
+      const root = analyzeRoot(`
       function App() {
         const [v, setV] = useState({ k: 1 });
         const { k } = v;
@@ -1223,16 +1214,13 @@ describe("scanNode — how state flows", () => {
       }
       function Child({ k }) { return <span>{k}</span>; }
     `);
-        expect(root.usage).toBe(Usage.ForwardsGetter);
-        expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Child");
-        expect(root.children[0]?.usage).toBe(Usage.Gets);
-      },
-    );
+      expect(root.usage).toBe(Usage.ForwardsGetter);
+      expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Child");
+      expect(root.children[0]?.usage).toBe(Usage.Gets);
+    });
 
-    it.failing(
-      "follows a field destructured from an opaque call on state",
-      () => {
-        const root = analyzeRoot(`
+    it.failing("follows a field destructured from an opaque call on state", () => {
+      const root = analyzeRoot(`
       function App() {
         const [v, setV] = useState(0);
         const { x } = wrap(v);
@@ -1240,16 +1228,13 @@ describe("scanNode — how state flows", () => {
       }
       function Child({ x }) { return <span>{x}</span>; }
     `);
-        expect(root.usage).toBe(Usage.ForwardsGetter);
-        expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Child");
-        expect(root.children[0]?.usage).toBe(Usage.Gets);
-      },
-    );
+      expect(root.usage).toBe(Usage.ForwardsGetter);
+      expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Child");
+      expect(root.children[0]?.usage).toBe(Usage.Gets);
+    });
 
-    it.failing(
-      "follows an array-destructured element forwarded to a child",
-      () => {
-        const root = analyzeRoot(`
+    it.failing("follows an array-destructured element forwarded to a child", () => {
+      const root = analyzeRoot(`
       function App() {
         const [v, setV] = useState(0);
         const [x] = [v];
@@ -1257,11 +1242,10 @@ describe("scanNode — how state flows", () => {
       }
       function Child({ x }) { return <span>{x}</span>; }
     `);
-        expect(root.usage).toBe(Usage.ForwardsGetter);
-        expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Child");
-        expect(root.children[0]?.usage).toBe(Usage.Gets);
-      },
-    );
+      expect(root.usage).toBe(Usage.ForwardsGetter);
+      expect(retrieveClosestCommonParentFromRoot(root).name).toBe("Child");
+      expect(root.children[0]?.usage).toBe(Usage.Gets);
+    });
   });
 });
 
