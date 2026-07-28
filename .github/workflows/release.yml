@@ -24,12 +24,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
 
-      # Node 20 ships npm 10.x; trusted publishing needs >= 11.5.1.
+      # Trusted publishing needs npm >= 11.5.1. Node 24 ships an 11.x, but the
+      # exact minor varies by runner image, so pin the floor explicitly.
       - name: Upgrade npm
-        run: npm install -g npm@latest
+        run: |
+          npm install -g npm@latest
+          node --version && npm --version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
